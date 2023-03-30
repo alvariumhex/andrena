@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::sync::Arc;
 
 use async_openai::error::OpenAIError;
@@ -7,7 +8,7 @@ use async_openai::types::{
 };
 use async_openai::Client as GptClient;
 
-use log::{debug, error, info, warn, trace};
+use log::{debug, error, info, trace, warn};
 
 use serenity::model::channel::Message;
 use serenity::{async_trait, prelude::*, Client};
@@ -27,24 +28,9 @@ impl EventHandler for Handler {
             .lock()
             .await;
 
-        gpt.context.push(
-            ChatCompletionRequestMessageArgs::default()
-                .role(Role::User)
-                .content(&message.content)
-                .name(message.author.name)
-                .build()
-                .unwrap(),
-        );
-
-        trace!("messages in context: {}", gpt.context.len());
-        
-        let mut token_count = get_chat_completion_max_tokens(&gpt.model, &gpt.context).unwrap();
-        debug!("token count: {}", token_count);
-        while token_count < 500 {
-            info!("Reached max token count, removing oldest message from context");
-            gpt.context.remove(2);
-            token_count = get_chat_completion_max_tokens(&gpt.model, &gpt.context).unwrap();
-        }
+        gpt.insert_message(&message).await;
+        gpt.manage_tokens().await;
+        debug!("token count: {}", gpt.token_count);
 
         if !message.author.bot
             && message
@@ -55,7 +41,7 @@ impl EventHandler for Handler {
             let typing = message.channel_id.start_typing(&context.http).unwrap();
 
             let request = CreateChatCompletionRequestArgs::default()
-                .max_tokens((token_count as u16) - 100)
+                .max_tokens((gpt.token_count as u16) - 100)
                 .model(&gpt.model)
                 .messages(gpt.context.clone())
                 .build()
@@ -67,13 +53,13 @@ impl EventHandler for Handler {
                     }
 
                     if let Some(resp) = response.choices.first() {
+                        // split message only if needed as discord has a 2k character limit
                         for content in split_string(&resp.message.content) {
                             message
                                 .channel_id
                                 .say(&context.http, content)
                                 .await
                                 .expect("failed to send message");
-
                         }
                     } else {
                         warn!("no choices");
@@ -92,6 +78,84 @@ struct GptContext {
     client: GptClient,
     model: String,
     context: Vec<ChatCompletionRequestMessage>,
+    token_count: usize,
+}
+
+impl GptContext {
+    async fn new(name: &str, model: &str, key: &str) -> Result<Self, Box<dyn Error>> {
+        let client = GptClient::new().with_api_key(key);
+        let context = vec![
+            ChatCompletionRequestMessageArgs::default()
+                .role(Role::System)
+                // .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
+                .build()
+                .unwrap(),
+            ChatCompletionRequestMessageArgs::default()
+                .role(Role::User)
+                // .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
+                .build()
+                .unwrap(),
+        ];
+        let token_count = get_chat_completion_max_tokens(model, &context)?;
+        Ok(Self {
+            name: name.to_owned(),
+            client,
+            model: model.to_owned(),
+            context,
+            token_count,
+        })
+    }
+
+    async fn manage_tokens(&mut self) {
+        self.token_count = get_chat_completion_max_tokens(&self.model, &self.context).expect("Failed to get max tokens");
+        while self.token_count < 750 {
+            info!("Reached max token count, removing oldest message from context");
+            self.context.remove(0);
+            self.token_count = get_chat_completion_max_tokens(&self.model, &self.context).expect("Failed to get max tokens");
+        }
+    }
+
+    async fn insert_message(&mut self, message: &Message) {
+        let mut content: String = message.content.to_owned();
+        let attachment_text = message.get_attachment_text().await.expect("Failed to read attachments");
+        content = format!("{} \n {}", content, attachment_text);
+
+        self.context.push(
+            ChatCompletionRequestMessageArgs::default()
+                .role(Role::User)
+                .content(&content)
+                .name(message.author.name.clone())
+                .build()
+                .unwrap(),
+        );
+    }
+}
+
+#[async_trait]
+trait MessageExtensions {
+    async fn get_attachment_text(&self) -> Result<String, Box<dyn Error>>;
+}
+
+#[async_trait]
+impl MessageExtensions for Message {
+    async fn get_attachment_text(&self) -> Result<String, Box<dyn Error>>{
+        let mut content: String = self.content.to_owned();
+        for attachment in self.attachments.clone() {
+            debug!("{:?}", attachment);
+            if let Some(content_type) = attachment.content_type {
+                if content_type == "text/plain; charset=utf-8" {
+                    debug!("Found text file in message, extracting content");
+                    let response = reqwest::get(attachment.url.clone()).await?;
+                    let bytes = response.bytes().await?;
+
+                    let attachment_text = String::from_utf8_lossy(&bytes).into_owned();
+                    content = format!("{} \n {}", content, attachment_text);
+                }
+            }
+        }
+
+        Ok(content)
+    }
 }
 
 impl TypeMapKey for GptContext {
@@ -125,26 +189,18 @@ async fn main() {
         .event_handler(Handler)
         .await
         .expect("Error creating client");
+    
+    let gpt = GptContext::new(
+        "Lovelace",
+        "gpt-3.5-turbo",
+        "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"
+    )
+    .await
+    .expect("Failed to create GptContext");
 
     {
         let mut data = client.data.write().await;
-        data.insert::<GptContext>(Arc::new(Mutex::new(GptContext{
-            name: "Lovelace".to_owned(),
-            model: "gpt-3.5-turbo".to_owned(),
-            client: GptClient::new().with_api_key("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"),
-            context: vec![
-                ChatCompletionRequestMessageArgs::default()
-                    .role(Role::System)
-                    // .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
-                    .build()
-                    .unwrap(),
-                ChatCompletionRequestMessageArgs::default()
-                    .role(Role::User)
-                    // .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
-                    .build()
-                    .unwrap(),
-            ]
-        })));
+        data.insert::<GptContext>(Arc::new(Mutex::new(gpt)));
     }
 
     if let Err(why) = client.start().await {

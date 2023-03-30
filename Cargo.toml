@@ -7,8 +7,10 @@ edition = "2021"
 
 [dependencies]
 async-openai = "0.10.1"
+async-trait = "0.1.68"
 env_logger = "0.10.0"
 log = "0.4.17"
+reqwest = "0.11.16"
 serenity = { version = "0.11.5", default-features = false, features = ["client", "gateway", "rustls_backend", "model"] }
 tiktoken-rs = "0.3.3"
 tokio = { version = "1.26.0", features = ["full"] }
