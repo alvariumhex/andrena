@@ -38,12 +38,12 @@ impl EventHandler for Handler {
 
         trace!("messages in context: {}", gpt.context.len());
         
-        let mut token_count = 3800 - get_chat_completion_max_tokens(&gpt.model, &gpt.context).unwrap();
+        let mut token_count = get_chat_completion_max_tokens(&gpt.model, &gpt.context).unwrap();
         debug!("token count: {}", token_count);
-        while token_count > 3000 {
+        while token_count < 500 {
             info!("Reached max token count, removing oldest message from context");
             gpt.context.remove(2);
-            token_count = 3800 - get_chat_completion_max_tokens(&gpt.model, &gpt.context).unwrap();
+            token_count = get_chat_completion_max_tokens(&gpt.model, &gpt.context).unwrap();
         }
 
         if !message.author.bot
@@ -55,7 +55,7 @@ impl EventHandler for Handler {
             let typing = message.channel_id.start_typing(&context.http).unwrap();
 
             let request = CreateChatCompletionRequestArgs::default()
-                .max_tokens(1024u16)
+                .max_tokens((token_count as u16) - 100)
                 .model(&gpt.model)
                 .messages(gpt.context.clone())
                 .build()
@@ -67,27 +67,13 @@ impl EventHandler for Handler {
                     }
 
                     if let Some(resp) = response.choices.first() {
-                        if resp.message.content.len() > 2000 {
-                            let (front, _) = resp.message.content.split_at(2000);
-                            let index = front.rfind(' ').unwrap();
-                            let (front, end) = resp.message.content.split_at(index);
+                        for content in split_string(&resp.message.content) {
                             message
                                 .channel_id
-                                .say(&context.http, front)
+                                .say(&context.http, content)
                                 .await
-                                .expect("Failed to send message");
+                                .expect("failed to send message");
 
-                            message
-                                .channel_id
-                                .say(&context.http, end)
-                                .await
-                                .expect("Failed to send message");
-                        } else {
-                            message
-                                .channel_id
-                                .say(&context.http, &resp.message.content)
-                                .await
-                                .expect("Failed to send message");
                         }
                     } else {
                         warn!("no choices");
@@ -112,6 +98,22 @@ impl TypeMapKey for GptContext {
     type Value = Arc<Mutex<GptContext>>;
 }
 
+fn split_string(input_string: &str) -> Vec<String> {
+    let mut output = vec![];
+    let mut current_chunk = String::new();
+    for line in input_string.lines() {
+        let new_chunk = format!("{}\n{}", current_chunk, line);
+        if new_chunk.len() > 2000 {
+            output.push(current_chunk.clone());
+            current_chunk = line.to_string();
+        } else {
+            current_chunk = new_chunk;
+        }
+    }
+    output.push(current_chunk);
+    output
+}
+
 #[tokio::main]
 async fn main() {
     env_logger::builder()
@@ -133,12 +135,12 @@ async fn main() {
             context: vec![
                 ChatCompletionRequestMessageArgs::default()
                     .role(Role::System)
-                    .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
+                    // .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
                     .build()
                     .unwrap(),
                 ChatCompletionRequestMessageArgs::default()
                     .role(Role::User)
-                    .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
+                    // .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
                     .build()
                     .unwrap(),
             ]
