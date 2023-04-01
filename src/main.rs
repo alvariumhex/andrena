@@ -8,7 +8,8 @@ use async_openai::types::{
 };
 use async_openai::Client as GptClient;
 
-use log::{debug, error, info, trace, warn};
+use async_recursion::async_recursion;
+use log::{debug, error, info, warn};
 
 use serenity::model::channel::Message;
 use serenity::{async_trait, prelude::*, Client};
@@ -40,33 +41,13 @@ impl EventHandler for Handler {
         {
             let typing = message.channel_id.start_typing(&context.http).unwrap();
 
-            let request = CreateChatCompletionRequestArgs::default()
-                .max_tokens((gpt.token_count as u16) - 100)
-                .model(&gpt.model)
-                .messages(gpt.context.clone())
-                .build()
-                .expect("Failed to build request");
-            match gpt.client.chat().create(request).await {
-                Ok(response) => {
-                    if let Some(usage) = response.usage {
-                        debug!("tokens: {}", usage.total_tokens);
-                    }
-
-                    if let Some(resp) = response.choices.first() {
-                        // split message only if needed as discord has a 2k character limit
-                        for content in split_string(&resp.message.content) {
-                            message
-                                .channel_id
-                                .say(&context.http, content)
-                                .await
-                                .expect("failed to send message");
-                        }
-                    } else {
-                        warn!("no choices");
-                    }
-                }
-                Err(OpenAIError::ApiError(err)) => error!("Request error: {:?}", err),
-                _ => error!("Request error"),
+            let response = gpt.get_response().await.unwrap();            // split message only if needed as discord has a 2k character limit
+            for content in split_string(&response) {
+                message
+                    .channel_id
+                    .say(&context.http, content)
+                    .await
+                    .expect("failed to send message");
             }
             typing.stop().unwrap();
         }
@@ -82,6 +63,44 @@ struct GptContext {
 }
 
 impl GptContext {
+    #[async_recursion]
+    async fn get_response(&mut self) -> Result<String, &str>{
+        let request = CreateChatCompletionRequestArgs::default()
+            .max_tokens((self.token_count as u16) - 110) // Token count is not perfect. So we
+            // remove some extras to prevent requesting to many tokens
+            .model(&self.model)
+            .messages(self.context.clone())
+            .build()
+            .expect("Failed to build request");
+        match self.client.chat().create(request).await {
+            Ok(response) => {
+                if let Some(usage) = response.usage {
+                    debug!("tokens: {}", usage.total_tokens);
+                }
+
+                if let Some(resp) = response.choices.first() {
+                    Ok(resp.message.content.clone())
+                } else {
+                    Err("No choices")
+                }
+            }
+            Err(OpenAIError::ApiError(err)) => {
+                error!("Request error: {:?}", err);
+                if let Some(code) = err.code {
+                    if code == "context_length_exceeded" {
+                        self.context.remove(0);
+                        self.get_response().await
+                    } else {
+                        Err("Request error")
+                    }
+                } else {
+                    Err("Request error")
+                }
+            }
+            _ => Err("Request error"),
+        }
+    }
+
     async fn new(name: &str, model: &str, key: &str) -> Result<Self, Box<dyn Error>> {
         let client = GptClient::new().with_api_key(key);
         let context = vec![
@@ -107,17 +126,22 @@ impl GptContext {
     }
 
     async fn manage_tokens(&mut self) {
-        self.token_count = get_chat_completion_max_tokens(&self.model, &self.context).expect("Failed to get max tokens");
+        self.token_count = get_chat_completion_max_tokens(&self.model, &self.context)
+            .expect("Failed to get max tokens");
         while self.token_count < 750 {
             info!("Reached max token count, removing oldest message from context");
             self.context.remove(0);
-            self.token_count = get_chat_completion_max_tokens(&self.model, &self.context).expect("Failed to get max tokens");
+            self.token_count = get_chat_completion_max_tokens(&self.model, &self.context)
+                .expect("Failed to get max tokens");
         }
     }
 
     async fn insert_message(&mut self, message: &Message) {
         let mut content: String = message.content.to_owned();
-        let attachment_text = message.get_attachment_text().await.expect("Failed to read attachments");
+        let attachment_text = message
+            .get_attachment_text()
+            .await
+            .expect("Failed to read attachments");
         content = format!("{} \n {}", content, attachment_text);
 
         self.context.push(
@@ -138,7 +162,7 @@ trait MessageExtensions {
 
 #[async_trait]
 impl MessageExtensions for Message {
-    async fn get_attachment_text(&self) -> Result<String, Box<dyn Error>>{
+    async fn get_attachment_text(&self) -> Result<String, Box<dyn Error>> {
         let mut content: String = self.content.to_owned();
         for attachment in self.attachments.clone() {
             debug!("{:?}", attachment);
@@ -189,11 +213,11 @@ async fn main() {
         .event_handler(Handler)
         .await
         .expect("Error creating client");
-    
+
     let gpt = GptContext::new(
         "Lovelace",
         "gpt-3.5-turbo",
-        "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"
+        "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",
     )
     .await
     .expect("Failed to create GptContext");
