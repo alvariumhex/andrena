@@ -45,8 +45,8 @@ impl EventHandler for Handler {
             let typing = message.channel_id.start_typing(&context.http).unwrap();
 
             let response = gpt.get_response().await.unwrap(); // split message only if needed as discord has a 2k character limit
+            debug!("response: {}", response);
             for content in split_string(&response) {
-                debug!("response: {}", content);
                 message
                     .channel_id
                     .say(&context.http, content)
@@ -110,14 +110,12 @@ impl GptContext {
         let context = vec![
             ChatCompletionRequestMessageArgs::default()
                 .role(Role::System)
-                .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. You will refer to us as Ms. My first sentence is 'Hi Lovelace.'")
-                // .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
+                .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. You will refer to us as ms. The names of the people you talk with are Xuna & Amo.")
                 .build()
                 .unwrap(),
             ChatCompletionRequestMessageArgs::default()
                 .role(Role::User)
-                .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. You will refer to us as ms. My first sentence is 'Hi Lovelace.'")
-                // .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
+                .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. You will refer to us as ms. The names of the people you talk with are Xuna & Amo.")
                 .build()
                 .unwrap(),
         ];
@@ -155,6 +153,7 @@ impl GptContext {
         let captures = regex.captures_iter(&content);
         for capture in captures {
             if let Some(url) = capture.get(0) {
+                debug!("Found link in message: {}", url.as_str());
                 let query = [
                     ("url", url.as_str()),
                     ("apikey", "26c6635eb2f70e76292f938d8cc64f2ffec5074a"),
@@ -194,6 +193,7 @@ impl GptContext {
             content = format!("{} \n {}", content, "SYSTEM: The content was too long to include in the chat. Mention that you can only assume content based on the url")
         }
 
+        content = content.trim().to_owned();
         debug!("end message content: {}", content);
 
         self.context.push(
@@ -215,7 +215,7 @@ trait MessageExtensions {
 #[async_trait]
 impl MessageExtensions for Message {
     async fn get_attachment_text(&self) -> Result<String, Box<dyn Error>> {
-        let mut content: String = self.content.to_owned();
+        let mut content: String = String::new();
         for attachment in self.attachments.clone() {
             debug!("{:?}", attachment);
             if let Some(content_type) = attachment.content_type {
@@ -230,7 +230,7 @@ impl MessageExtensions for Message {
             }
         }
 
-        Ok(content)
+        Ok(content.trim().to_owned())
     }
 }
 
