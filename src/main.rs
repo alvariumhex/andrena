@@ -46,6 +46,7 @@ impl EventHandler for Handler {
 
             let response = gpt.get_response().await.unwrap(); // split message only if needed as discord has a 2k character limit
             for content in split_string(&response) {
+                debug!("response: {}", content);
                 message
                     .channel_id
                     .say(&context.http, content)
@@ -154,7 +155,10 @@ impl GptContext {
         let captures = regex.captures_iter(&content);
         for capture in captures {
             if let Some(url) = capture.get(0) {
-                let query = [("url", url.as_str()), ("apikey", "26c6635eb2f70e76292f938d8cc64f2ffec5074a")];
+                let query = [
+                    ("url", url.as_str()),
+                    ("apikey", "26c6635eb2f70e76292f938d8cc64f2ffec5074a"),
+                ];
                 let client = reqwest::Client::new();
                 let response = client
                     .get("http://localhost:8080/article")
@@ -175,11 +179,13 @@ impl GptContext {
 
         let web_contents = web_contents.join("\n");
         let bpe = get_bpe_from_model(&self.model).unwrap();
-        let token_count = bpe
-            .encode_with_special_tokens(&format!("{} \n {}", content, web_contents))
-            .len();
-        debug!("Token count of web content: {}", token_count);
-        if token_count < get_context_size(&self.model) - 200 {
+        let token_count_web_content = bpe.encode_with_special_tokens(&web_contents).len();
+        let token_count_message = bpe.encode_with_special_tokens(&content).len();
+
+        debug!("Token count of web content: {}", token_count_web_content);
+        debug!("Token count of message: {}", token_count_message);
+
+        if (token_count_web_content + token_count_message) < get_context_size(&self.model) - 200 {
             content = format!("{} \n {}", content, web_contents);
         } else {
             debug!("Web url content longer than context");
@@ -187,6 +193,8 @@ impl GptContext {
             // hallucinating an answer based on the url
             content = format!("{} \n {}", content, "SYSTEM: The content was too long to include in the chat. Mention that you can only assume content based on the url")
         }
+
+        debug!("end message content: {}", content);
 
         self.context.push(
             ChatCompletionRequestMessageArgs::default()
@@ -242,7 +250,7 @@ fn split_string(input_string: &str) -> Vec<String> {
             current_chunk = new_chunk;
         }
     }
-    output.push(current_chunk);
+    output.push(current_chunk.trim().to_owned());
     output
 }
 
@@ -273,5 +281,51 @@ async fn main() {
 
     if let Err(why) = client.start().await {
         error!("Client error: {:?}", why);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn it_splits_into_chunks_of_max_2000_chars() {
+        let long_string = "Lorem ipsum dolor sit amet, 
+            consectetur adipiscing elit. 
+            Proin sit amet risus ut enim hendrerit varius. 
+            Mauris bibendum sodales mauris, 
+            non hendrerit augue congue id. 
+            Nulla facilisi. 
+            Vestibulum iaculis velit eget mauris efficitur, 
+            at sagittis eros faucibus. 
+            Sed porttitor libero non ex ullamcorper, 
+            nec varius purus consectetur. 
+            Praesent quis pharetra urna. 
+            Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; 
+            Donec nec scelerisque urna. 
+            Sed efficitur quam id volutpat consectetur. 
+            Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; 
+            Sed maximus lacus a maximus posuere. 
+            Donec sollicitudin mollis ullamcorper. 
+            Sed pellentesque justo neque, at blandit enim semper non."
+            .repeat(3);
+        let chunks = split_string(&long_string);
+        assert_eq!(chunks.len(), 2);
+    }
+
+    #[test]
+    fn it_handles_empty_input() {
+        let input = "";
+        let chunks = split_string(input);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "");
+    }
+
+    #[test]
+    fn it_handles_small_texts() {
+        let input = "Lorem ipsum dolor sit amet, consectetur adipiscing elit.";
+        let chunks = split_string(input);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], input);
     }
 }
