@@ -9,12 +9,15 @@ use async_openai::types::{
 use async_openai::Client as GptClient;
 
 use async_recursion::async_recursion;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 
 use serenity::model::channel::Message;
 use serenity::{async_trait, prelude::*, Client};
 
-use tiktoken_rs::get_chat_completion_max_tokens;
+use tiktoken_rs::model::get_context_size;
+use tiktoken_rs::{get_bpe_from_model, get_chat_completion_max_tokens};
+
+use regex::Regex;
 
 struct Handler;
 
@@ -41,7 +44,7 @@ impl EventHandler for Handler {
         {
             let typing = message.channel_id.start_typing(&context.http).unwrap();
 
-            let response = gpt.get_response().await.unwrap();            // split message only if needed as discord has a 2k character limit
+            let response = gpt.get_response().await.unwrap(); // split message only if needed as discord has a 2k character limit
             for content in split_string(&response) {
                 message
                     .channel_id
@@ -64,7 +67,7 @@ struct GptContext {
 
 impl GptContext {
     #[async_recursion]
-    async fn get_response(&mut self) -> Result<String, &str>{
+    async fn get_response(&mut self) -> Result<String, &str> {
         let request = CreateChatCompletionRequestArgs::default()
             .max_tokens((self.token_count as u16) - 110) // Token count is not perfect. So we
             // remove some extras to prevent requesting to many tokens
@@ -106,11 +109,13 @@ impl GptContext {
         let context = vec![
             ChatCompletionRequestMessageArgs::default()
                 .role(Role::System)
+                .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. You will refer to us as Ms. My first sentence is 'Hi Lovelace.'")
                 // .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
                 .build()
                 .unwrap(),
             ChatCompletionRequestMessageArgs::default()
                 .role(Role::User)
+                .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. You will refer to us as ms. My first sentence is 'Hi Lovelace.'")
                 // .content("I want you to act as a personal assistant in a conversation. Each message will start with the persons name and then their message content. You're behaviour should match that of Jarvis from Iron Man. You will respond exactly as Jarvis. You're name is Lovelace instead of Jarvis. Do not prefix your messages with 'Lovelace:'.")
                 .build()
                 .unwrap(),
@@ -143,6 +148,45 @@ impl GptContext {
             .await
             .expect("Failed to read attachments");
         content = format!("{} \n {}", content, attachment_text);
+        let regex = Regex::new(r"(?m)https?://(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,4}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)").unwrap();
+
+        let mut web_contents: Vec<String> = vec![];
+        let captures = regex.captures_iter(&content);
+        for capture in captures {
+            if let Some(url) = capture.get(0) {
+                let query = [("url", url.as_str()), ("apikey", "26c6635eb2f70e76292f938d8cc64f2ffec5074a")];
+                let client = reqwest::Client::new();
+                let response = client
+                    .get("http://localhost:8080/article")
+                    .query(&query)
+                    .send()
+                    .await
+                    .unwrap();
+
+                let url_content = response.text().await.unwrap();
+                debug!("Web contents: {}", url_content);
+                web_contents.push(format!(
+                    "\n link: {} \n link content: {}",
+                    url.as_str(),
+                    url_content
+                ));
+            };
+        }
+
+        let web_contents = web_contents.join("\n");
+        let bpe = get_bpe_from_model(&self.model).unwrap();
+        let token_count = bpe
+            .encode_with_special_tokens(&format!("{} \n {}", content, web_contents))
+            .len();
+        debug!("Token count of web content: {}", token_count);
+        if token_count < get_context_size(&self.model) - 200 {
+            content = format!("{} \n {}", content, web_contents);
+        } else {
+            debug!("Web url content longer than context");
+            // Explain to GPT that the article couldn't be included, this prevents GPT of
+            // hallucinating an answer based on the url
+            content = format!("{} \n {}", content, "SYSTEM: The content was too long to include in the chat. Mention that you can only assume content based on the url")
+        }
 
         self.context.push(
             ChatCompletionRequestMessageArgs::default()
