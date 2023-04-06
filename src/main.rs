@@ -23,6 +23,47 @@ struct Handler;
 
 #[async_trait]
 impl EventHandler for Handler {
+    async fn interaction_create(&self, context: Context, interaction: Interaction) {
+        if let Interaction::ApplicationCommand(command) = interaction {
+            debug!("Received command interaction: {:#?}", command);
+
+            let data_read = context.data.read().await;
+            let mut gpt = data_read
+                .get::<GptContext>()
+                .expect("No Gpt Context")
+                .lock()
+                .await;
+
+            let content = match command.data.name.as_str() {
+                "clear_context" => commands::clear_context::run(&command.data.options, &mut gpt),
+                _ => {
+                    error!("Command not implemented: {}", command.data.name);
+                    "Command not implemented".to_owned()
+                }
+            };
+
+            if let Err(why) = command
+                .create_interaction_response(&context.http, |response| {
+                    response
+                        .kind(InteractionResponseType::ChannelMessageWithSource)
+                        .interaction_response_data(|message| message.content(content))
+                })
+                .await
+            {
+                error!("Cannot respond to slash command: {}", why);
+            }
+        };
+    }
+
+    async fn ready(&self, context: Context, ready: Ready) {
+        info!("{} is connected!", ready.user.name);
+
+        Command::create_global_application_command(&context.http, |command| {
+            commands::clear_context::register(command)
+        })
+        .await
+        .expect("Failed to create global command");
+    }
     async fn message(&self, context: Context, message: Message) {
         debug!("{}: {}", message.author.name, message.content);
         let data_read = context.data.read().await;
