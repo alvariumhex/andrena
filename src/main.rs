@@ -1,12 +1,11 @@
-use std::collections::HashSet;
 use std::error::Error;
-use std::sync::Arc;
+use std::time::Duration;
 
 use async_openai::error::OpenAIError;
 use async_openai::types::CreateChatCompletionRequestArgs;
 use async_openai::types::{
-    AudioResponseFormat, ChatCompletionRequestMessage, ChatCompletionRequestMessageArgs,
-    CreateTranscriptionRequest, CreateTranscriptionRequestArgs, Role,
+    ChatCompletionRequestMessage, ChatCompletionRequestMessageArgs, CreateTranscriptionRequestArgs,
+    Role,
 };
 use async_openai::Client as GptClient;
 
@@ -14,98 +13,35 @@ use async_recursion::async_recursion;
 use log::{debug, error, info, trace};
 
 use rustube::{Id, VideoFetcher};
-use serenity::http::Http;
-use serenity::model::channel::Message;
-use serenity::model::prelude::command::Command;
-use serenity::model::prelude::interaction::{Interaction, InteractionResponseType};
-use serenity::model::prelude::Ready;
-use serenity::{async_trait, prelude::*, Client};
+use serde::{Deserialize, Serialize};
 
 use tiktoken_rs::model::get_context_size;
 use tiktoken_rs::{get_bpe_from_model, get_chat_completion_max_tokens};
 
 use regex::Regex;
-mod commands;
 
-struct Handler;
+use paho_mqtt::{self as mqtt, MQTT_VERSION_5};
 
-#[async_trait]
-impl EventHandler for Handler {
-    async fn interaction_create(&self, context: Context, interaction: Interaction) {
-        if let Interaction::ApplicationCommand(command) = interaction {
-            debug!("Received command interaction: {:#?}", command);
+#[derive(Serialize, Deserialize)]
+struct DiscordMessage {
+    author: String,
+    content: String,
+    attachments: Vec<Attachment>,
+    channel: u64,
+}
 
-            let data_read = context.data.read().await;
-            let mut gpt = data_read
-                .get::<GptContext>()
-                .expect("No Gpt Context")
-                .lock()
-                .await;
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct Attachment {
+    url: String,
+    content_type: String,
+    title: String,
+}
 
-            let content = match command.data.name.as_str() {
-                "clear_context" => commands::clear_context::run(&command.data.options, &mut gpt),
-                _ => {
-                    error!("Command not implemented: {}", command.data.name);
-                    "Command not implemented".to_owned()
-                }
-            };
 
-            if let Err(why) = command
-                .create_interaction_response(&context.http, |response| {
-                    response
-                        .kind(InteractionResponseType::ChannelMessageWithSource)
-                        .interaction_response_data(|message| message.content(content))
-                })
-                .await
-            {
-                error!("Cannot respond to slash command: {}", why);
-            }
-        };
-    }
-
-    async fn ready(&self, context: Context, ready: Ready) {
-        info!("{} is connected!", ready.user.name);
-
-        Command::create_global_application_command(&context.http, |command| {
-            commands::clear_context::register(command)
-        })
-        .await
-        .expect("Failed to create global command");
-    }
-
-    async fn message(&self, context: Context, message: Message) {
-        debug!("{}: {}", message.author.name, message.content);
-        let data_read = context.data.read().await;
-        let mut gpt = data_read
-            .get::<GptContext>()
-            .expect("No Gpt Context")
-            .lock()
-            .await;
-
-        gpt.insert_message(&message).await;
-        gpt.manage_tokens().await;
-        debug!("token count: {}", gpt.token_count);
-
-        if !message.author.bot
-            && message
-                .content
-                .to_lowercase()
-                .contains(&gpt.name.to_lowercase())
-        {
-            let typing = message.channel_id.start_typing(&context.http).unwrap();
-
-            let response = gpt.get_response().await.unwrap(); // split message only if needed as discord has a 2k character limit
-            debug!("response: {}", response);
-            for content in split_string(&response) {
-                message
-                    .channel_id
-                    .say(&context.http, content)
-                    .await
-                    .expect("failed to send message");
-            }
-            typing.stop().unwrap();
-        }
-    }
+#[derive(Serialize, Deserialize)]
+struct DiscordSend {
+    content: String,
+    channel: u64,
 }
 
 pub struct GptContext {
@@ -190,10 +126,9 @@ impl GptContext {
         }
     }
 
-    async fn insert_message(&mut self, message: &Message) {
+    async fn insert_message(&mut self, message: &DiscordMessage) {
         let mut content: String = message.content.to_owned();
-        let attachment_text = message
-            .get_attachment_text()
+        let attachment_text = get_attachment_text(&message.attachments)
             .await
             .expect("Failed to read attachments");
         content = format!("{} \n {}", content, attachment_text);
@@ -237,7 +172,7 @@ impl GptContext {
             ChatCompletionRequestMessageArgs::default()
                 .role(Role::User)
                 .content(&content)
-                .name(message.author.name.clone())
+                .name(message.author.clone())
                 .build()
                 .unwrap(),
         );
@@ -251,7 +186,7 @@ pub async fn get_video_transcription(content: &str, client: &GptClient) -> Strin
     for capture in captures {
         debug!("captures: {:?}", capture);
         if let Some(url) = capture.get(0) {
-            debug!("Found youtube link in message: {}", url.as_str());
+            trace!("Found youtube link in message: {}", url.as_str());
             let id = Id::from_raw(url.as_str()).unwrap();
             let descrambler = VideoFetcher::from_id(id.into_owned())
                 .unwrap()
@@ -303,7 +238,7 @@ pub async fn get_web_content(content: &str) -> String {
     let captures = regex.captures_iter(content);
     for capture in captures {
         if let Some(url) = capture.get(0) {
-            debug!("Found link in message: {}", url.as_str());
+            trace!("Found link in message: {}", url.as_str());
             let query = [
                 ("url", url.as_str()),
                 ("apikey", "26c6635eb2f70e76292f938d8cc64f2ffec5074a"),
@@ -317,7 +252,7 @@ pub async fn get_web_content(content: &str) -> String {
                 .unwrap();
 
             let url_content = response.text().await.unwrap();
-            debug!("Web contents: {}", url_content);
+            trace!("Web contents: {}", url_content);
             web_contents.push(format!(
                 "\n link: {} \n link content: {}",
                 url.as_str(),
@@ -329,83 +264,33 @@ pub async fn get_web_content(content: &str) -> String {
     web_contents.join("\n")
 }
 
-#[async_trait]
-trait MessageExtensions {
-    async fn get_attachment_text(&self) -> Result<String, Box<dyn Error>>;
-}
+async fn get_attachment_text(attachments: &Vec<Attachment>) -> Result<String, Box<dyn Error>> {
+    let mut content: String = String::new();
+    for attachment in attachments.clone() {
+        debug!("{:?}", attachment);
+        if attachment.content_type == "text/plain; charset=utf-8" {
+            trace!("Found text file in message, extracting content");
+            let response = reqwest::get(attachment.url.clone()).await?;
+            let bytes = response.bytes().await?;
 
-#[async_trait]
-impl MessageExtensions for Message {
-    async fn get_attachment_text(&self) -> Result<String, Box<dyn Error>> {
-        let mut content: String = String::new();
-        for attachment in self.attachments.clone() {
-            debug!("{:?}", attachment);
-            if let Some(content_type) = attachment.content_type {
-                if content_type == "text/plain; charset=utf-8" {
-                    debug!("Found text file in message, extracting content");
-                    let response = reqwest::get(attachment.url.clone()).await?;
-                    let bytes = response.bytes().await?;
-
-                    let attachment_text = String::from_utf8_lossy(&bytes).into_owned();
-                    content = format!("{} \n {}", content, attachment_text);
-                }
-            }
-        }
-
-        Ok(content.trim().to_owned())
-    }
-}
-
-impl TypeMapKey for GptContext {
-    type Value = Arc<Mutex<GptContext>>;
-}
-
-fn split_string(input_string: &str) -> Vec<String> {
-    let mut output = vec![];
-    let mut current_chunk = String::new();
-    for line in input_string.lines() {
-        let new_chunk = format!("{}\n{}", current_chunk, line);
-        if new_chunk.len() > 2000 {
-            output.push(current_chunk.clone());
-            current_chunk = line.to_string();
-        } else {
-            current_chunk = new_chunk;
+            let attachment_text = String::from_utf8_lossy(&bytes).into_owned();
+            content = format!("{} \n {}", content, attachment_text);
         }
     }
-    output.push(current_chunk.trim().to_owned());
-    output
+
+    Ok(content.trim().to_owned())
 }
+
+const TOPICS: &[&str] = &["carpenter/discord/receive"];
+const QOS: &[i32] = &[1];
 
 #[tokio::main]
 async fn main() {
-    env_logger::builder()
+    pretty_env_logger::formatted_builder()
         .filter(Some("andrena"), log::LevelFilter::Trace)
         .init();
-    let discord_token = "MTA5MDAwODk2MDk5NzgwNjE0MA.GPZ2yG.fd_YtL88A7zm1uP1K0F-Rw1-jVgsqnP7kkqlA8";
-    let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
-    let http = Http::new(discord_token);
-    let (owners, bot_id) = match http.get_current_application_info().await {
-        Ok(info) => {
-            let mut owners = HashSet::new();
-            if let Some(team) = info.team {
-                owners.insert(team.owner_user_id);
-            } else {
-                owners.insert(info.owner.id);
-            }
-            match http.get_current_user().await {
-                Ok(bot_id) => (owners, bot_id.id),
-                Err(why) => panic!("Could not access the bot id: {:?}", why),
-            }
-        }
-        Err(why) => panic!("Could not access application info: {:?}", why),
-    };
 
-    let mut client = Client::builder(discord_token, intents)
-        .event_handler(Handler)
-        .await
-        .expect("Error creating client");
-
-    let gpt = GptContext::new(
+    let mut gpt = GptContext::new(
         "Lovelace",
         "gpt-4-0314",
         "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",
@@ -413,58 +298,60 @@ async fn main() {
     .await
     .expect("Failed to create GptContext");
 
-    {
-        let mut data = client.data.write().await;
-        data.insert::<GptContext>(Arc::new(Mutex::new(gpt)));
-    }
+    let create_opts = mqtt::CreateOptionsBuilder::new()
+        .server_uri("mqtt://localhost:1883")
+        .finalize();
 
-    if let Err(why) = client.start().await {
-        error!("Client error: {:?}", why);
-    }
-}
+    let mut client = mqtt::AsyncClient::new(create_opts).unwrap();
+    let stream = client.get_stream(25);
+    let conn_opts = mqtt::ConnectOptionsBuilder::with_mqtt_version(MQTT_VERSION_5)
+        .clean_start(false)
+        .properties(mqtt::properties![mqtt::PropertyCode::SessionExpiryInterval => 3600])
+        .finalize();
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    client.connect(conn_opts).await.unwrap();
+    info!("MQTT connected");
+    let sub_opts = vec![mqtt::SubscribeOptions::with_retain_as_published(); TOPICS.len()];
+    client
+        .subscribe_many_with_options(TOPICS, QOS, &sub_opts, None)
+        .await
+        .unwrap();
+    info!("Subscribed to: {:?}", TOPICS);
 
-    #[test]
-    fn it_splits_into_chunks_of_max_2000_chars() {
-        let long_string = "Lorem ipsum dolor sit amet, 
-            consectetur adipiscing elit. 
-            Proin sit amet risus ut enim hendrerit varius. 
-            Mauris bibendum sodales mauris, 
-            non hendrerit augue congue id. 
-            Nulla facilisi. 
-            Vestibulum iaculis velit eget mauris efficitur, 
-            at sagittis eros faucibus. 
-            Sed porttitor libero non ex ullamcorper, 
-            nec varius purus consectetur. 
-            Praesent quis pharetra urna. 
-            Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; 
-            Donec nec scelerisque urna. 
-            Sed efficitur quam id volutpat consectetur. 
-            Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; 
-            Sed maximus lacus a maximus posuere. 
-            Donec sollicitudin mollis ullamcorper. 
-            Sed pellentesque justo neque, at blandit enim semper non."
-            .repeat(3);
-        let chunks = split_string(&long_string);
-        assert_eq!(chunks.len(), 2);
-    }
+    tokio::spawn(async move {
+        loop {
+            while let Ok(message_options) = stream.recv().await {
+                if let Some(message) = message_options {
+                    if message.retained() {
+                        info!("(R) ");
+                    }
+                    let json_string: String =
+                        String::from_utf8(message.payload().to_vec()).unwrap();
+                    let discord_message: DiscordMessage =
+                        serde_json::from_str(&json_string).unwrap();
+                    debug!("{}: {}", discord_message.author, discord_message.content);
 
-    #[test]
-    fn it_handles_empty_input() {
-        let input = "";
-        let chunks = split_string(input);
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0], "");
-    }
 
-    #[test]
-    fn it_handles_small_texts() {
-        let input = "Lorem ipsum dolor sit amet, consectetur adipiscing elit.";
-        let chunks = split_string(input);
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0], input);
-    }
+                    gpt.insert_message(&discord_message).await;
+                    gpt.manage_tokens().await;
+                    trace!("remaining token count: {}", gpt.token_count);
+
+                    if discord_message.author.to_lowercase() != "lovelace" && discord_message.content.to_lowercase().contains("lovelace") {
+                        let response = gpt.get_response().await.unwrap(); // split message only if needed as discord has a 2k character limit
+                        debug!("response: {}", response);
+
+                        let json = serde_json::to_string(&DiscordSend { content: response, channel: discord_message.channel }).unwrap();
+                        let send_message = mqtt::Message::new("carpenter/discord/send", json.as_str(), mqtt::QOS_2);
+                        client.publish(send_message).await.expect("Failed to send message");
+                    }
+                } else {
+                    error!("Lost connection. Attempting reconnect.");
+                    while let Err(err) = client.reconnect().await {
+                        println!("Error reconnecting: {}", err);
+                        tokio::time::sleep(Duration::from_millis(1000)).await;
+                    }
+                }
+            }
+        }
+    }).await.unwrap();
 }
