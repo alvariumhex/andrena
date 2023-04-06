@@ -1,23 +1,31 @@
+use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 
 use async_openai::error::OpenAIError;
+use async_openai::types::CreateChatCompletionRequestArgs;
 use async_openai::types::{
-    ChatCompletionRequestMessage, ChatCompletionRequestMessageArgs,
-    CreateChatCompletionRequestArgs, Role,
+    AudioResponseFormat, ChatCompletionRequestMessage, ChatCompletionRequestMessageArgs,
+    CreateTranscriptionRequest, CreateTranscriptionRequestArgs, Role,
 };
 use async_openai::Client as GptClient;
 
 use async_recursion::async_recursion;
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 
+use rustube::{Id, VideoFetcher};
+use serenity::http::Http;
 use serenity::model::channel::Message;
+use serenity::model::prelude::command::Command;
+use serenity::model::prelude::interaction::{Interaction, InteractionResponseType};
+use serenity::model::prelude::Ready;
 use serenity::{async_trait, prelude::*, Client};
 
 use tiktoken_rs::model::get_context_size;
 use tiktoken_rs::{get_bpe_from_model, get_chat_completion_max_tokens};
 
 use regex::Regex;
+mod commands;
 
 struct Handler;
 
@@ -64,6 +72,7 @@ impl EventHandler for Handler {
         .await
         .expect("Failed to create global command");
     }
+
     async fn message(&self, context: Context, message: Message) {
         debug!("{}: {}", message.author.name, message.content);
         let data_read = context.data.read().await;
@@ -99,7 +108,7 @@ impl EventHandler for Handler {
     }
 }
 
-struct GptContext {
+pub struct GptContext {
     name: String,
     client: GptClient,
     model: String,
@@ -151,12 +160,12 @@ impl GptContext {
         let context = vec![
             ChatCompletionRequestMessageArgs::default()
                 .role(Role::System)
-                .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. You will refer to us as ms. The names of the people you talk with are Xuna & Amo.")
+                .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. The names of the people you talk with are Xuna & Amo. They are both female.")
                 .build()
                 .unwrap(),
             ChatCompletionRequestMessageArgs::default()
                 .role(Role::User)
-                .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. You will refer to us as ms. The names of the people you talk with are Xuna & Amo.")
+                .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. The names of the people you talk with are Xuna & Amo. They are both female.")
                 .build()
                 .unwrap(),
         ];
@@ -188,39 +197,13 @@ impl GptContext {
             .await
             .expect("Failed to read attachments");
         content = format!("{} \n {}", content, attachment_text);
-        let regex = Regex::new(r"(?m)https?://(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,4}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)").unwrap();
 
-        let mut web_contents: Vec<String> = vec![];
-        let captures = regex.captures_iter(&content);
-        for capture in captures {
-            if let Some(url) = capture.get(0) {
-                debug!("Found link in message: {}", url.as_str());
-                let query = [
-                    ("url", url.as_str()),
-                    ("apikey", "26c6635eb2f70e76292f938d8cc64f2ffec5074a"),
-                ];
-                let client = reqwest::Client::new();
-                let response = client
-                    .get("http://localhost:8080/article")
-                    .query(&query)
-                    .send()
-                    .await
-                    .unwrap();
-
-                let url_content = response.text().await.unwrap();
-                debug!("Web contents: {}", url_content);
-                web_contents.push(format!(
-                    "\n link: {} \n link content: {}",
-                    url.as_str(),
-                    url_content
-                ));
-            };
-        }
-
-        let web_contents = web_contents.join("\n");
         let bpe = get_bpe_from_model(&self.model).unwrap();
-        let token_count_web_content = bpe.encode_with_special_tokens(&web_contents).len();
         let token_count_message = bpe.encode_with_special_tokens(&content).len();
+
+        // web content
+        let web_contents = get_web_content(&message.content).await;
+        let token_count_web_content = bpe.encode_with_special_tokens(&web_contents).len();
 
         debug!("Token count of web content: {}", token_count_web_content);
         debug!("Token count of message: {}", token_count_message);
@@ -232,6 +215,19 @@ impl GptContext {
             // Explain to GPT that the article couldn't be included, this prevents GPT of
             // hallucinating an answer based on the url
             content = format!("{} \n {}", content, "SYSTEM: The content was too long to include in the chat. Mention that you can only assume content based on the url")
+        }
+
+        // video content
+        let video_contents = get_video_transcription(&message.content, &self.client).await;
+        let token_count_video_content = bpe.encode_with_special_tokens(&video_contents).len();
+        if (token_count_video_content + token_count_message) < get_context_size(&self.model) - 200 {
+            content = format!("{} \n {}", content, video_contents);
+        } else {
+            debug!("Video transcription longer than contenxt");
+            content = format!(
+                "{} \n {}",
+                content, "SYSTEM: The video content was too long to include in the chat."
+            );
         }
 
         content = content.trim().to_owned();
@@ -246,6 +242,91 @@ impl GptContext {
                 .unwrap(),
         );
     }
+}
+
+pub async fn get_video_transcription(content: &str, client: &GptClient) -> String {
+    let regex = Regex::new(r"(?m)((?:https?:)?//)?((?:www|m)\.)?((?:youtube(-nocookie)?\.com|youtu.be))(/(?:[\w\-]+\?v=|embed/|v/)?)([\w\-]+)(\S+)?").unwrap();
+    let captures = regex.captures_iter(content);
+    let mut content = String::new();
+    for capture in captures {
+        debug!("captures: {:?}", capture);
+        if let Some(url) = capture.get(0) {
+            debug!("Found youtube link in message: {}", url.as_str());
+            let id = Id::from_raw(url.as_str()).unwrap();
+            let descrambler = VideoFetcher::from_id(id.into_owned())
+                .unwrap()
+                .fetch()
+                .await
+                .expect("Failed to get video metadata");
+            let video = descrambler.descramble().unwrap();
+            let path_to_video = video
+                .worst_audio()
+                .unwrap()
+                .download()
+                .await
+                .expect("Could not download video audio");
+
+            debug!(
+                "Downloaded video audio: {}, {:?}",
+                url.as_str(),
+                path_to_video.to_str()
+            );
+
+            let request = CreateTranscriptionRequestArgs::default()
+                .file(path_to_video.to_str().unwrap())
+                .model("whisper-1")
+                .build()
+                .unwrap();
+            trace!("Starting transcription request");
+            let response = client
+                .audio()
+                .transcribe(request)
+                .await
+                .expect("Failed to fetch transcription")
+                .text;
+            content = format!(
+                "{} \n video title: {} \n video transcription: {}",
+                content,
+                video.title(),
+                response
+            );
+        }
+    }
+    debug!("Video content: {}", content);
+    content.trim().to_owned()
+}
+
+pub async fn get_web_content(content: &str) -> String {
+    let regex = Regex::new(r"(?m)https?://(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,4}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)").unwrap();
+
+    let mut web_contents: Vec<String> = vec![];
+    let captures = regex.captures_iter(content);
+    for capture in captures {
+        if let Some(url) = capture.get(0) {
+            debug!("Found link in message: {}", url.as_str());
+            let query = [
+                ("url", url.as_str()),
+                ("apikey", "26c6635eb2f70e76292f938d8cc64f2ffec5074a"),
+            ];
+            let client = reqwest::Client::new();
+            let response = client
+                .get("http://localhost:8080/article")
+                .query(&query)
+                .send()
+                .await
+                .unwrap();
+
+            let url_content = response.text().await.unwrap();
+            debug!("Web contents: {}", url_content);
+            web_contents.push(format!(
+                "\n link: {} \n link content: {}",
+                url.as_str(),
+                url_content
+            ));
+        };
+    }
+
+    web_contents.join("\n")
 }
 
 #[async_trait]
@@ -302,6 +383,23 @@ async fn main() {
         .init();
     let discord_token = "MTA5MDAwODk2MDk5NzgwNjE0MA.GPZ2yG.fd_YtL88A7zm1uP1K0F-Rw1-jVgsqnP7kkqlA8";
     let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
+    let http = Http::new(discord_token);
+    let (owners, bot_id) = match http.get_current_application_info().await {
+        Ok(info) => {
+            let mut owners = HashSet::new();
+            if let Some(team) = info.team {
+                owners.insert(team.owner_user_id);
+            } else {
+                owners.insert(info.owner.id);
+            }
+            match http.get_current_user().await {
+                Ok(bot_id) => (owners, bot_id.id),
+                Err(why) => panic!("Could not access the bot id: {:?}", why),
+            }
+        }
+        Err(why) => panic!("Could not access application info: {:?}", why),
+    };
+
     let mut client = Client::builder(discord_token, intents)
         .event_handler(Handler)
         .await
@@ -309,7 +407,7 @@ async fn main() {
 
     let gpt = GptContext::new(
         "Lovelace",
-        "gpt-3.5-turbo",
+        "gpt-4-0314",
         "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",
     )
     .await
