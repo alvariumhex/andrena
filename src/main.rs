@@ -22,6 +22,8 @@ use regex::Regex;
 
 use paho_mqtt::{self as mqtt, MQTT_VERSION_5};
 
+mod context;
+
 #[derive(Serialize, Deserialize)]
 struct DiscordMessage {
     author: String,
@@ -304,16 +306,11 @@ async fn main() {
 
     let mut client = mqtt::AsyncClient::new(create_opts).unwrap();
     let stream = client.get_stream(25);
-    let conn_opts = mqtt::ConnectOptionsBuilder::with_mqtt_version(MQTT_VERSION_5)
-        .clean_start(false)
-        .properties(mqtt::properties![mqtt::PropertyCode::SessionExpiryInterval => 3600])
-        .finalize();
 
-    client.connect(conn_opts).await.unwrap();
+    client.connect(None).await.unwrap();
     info!("MQTT connected");
-    let sub_opts = vec![mqtt::SubscribeOptions::with_retain_as_published(); TOPICS.len()];
     client
-        .subscribe_many_with_options(TOPICS, QOS, &sub_opts, None)
+        .subscribe_many(TOPICS, QOS)
         .await
         .unwrap();
     info!("Subscribed to: {:?}", TOPICS);
