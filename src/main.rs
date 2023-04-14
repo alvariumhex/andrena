@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_openai::error::OpenAIError;
+use async_openai::types::CreateChatCompletionRequestArgs;
 use async_openai::types::{ChatCompletionRequestMessage, ChatCompletionRequestMessageArgs, Role};
-use async_openai::types::{CreateChatCompletionRequestArgs};
 use async_openai::Client as GptClient;
 
 use async_recursion::async_recursion;
@@ -56,19 +57,22 @@ pub struct GptContext {
     name: String,
     client: GptClient,
     model: String,
-    context: Vec<ChatCompletionRequestMessage>,
-    token_count: usize,
+    context: HashMap<String, Vec<ChatCompletionRequestMessage>>,
+    token_count: HashMap<String, u16>,
     embeddings: Vec<Embedding>,
 }
 
 impl GptContext {
     #[async_recursion]
-    async fn get_response(&mut self) -> Result<String, &str> {
+    async fn get_response(&mut self, channel_id: &str) -> Result<String, &str> {
+        let context = self.context.get(channel_id).unwrap();
+        let token_count = self.token_count.get(channel_id).unwrap();
+
         let request = CreateChatCompletionRequestArgs::default()
-            .max_tokens((self.token_count as u16) - 110) // Token count is not perfect. So we
+            .max_tokens((token_count) - 110) // Token count is not perfect. So we
             // remove some extras to prevent requesting to many tokens
             .model(&self.model)
-            .messages(self.context.clone())
+            .messages(context.clone())
             .build()
             .expect("Failed to build request");
         match self.client.chat().create(request).await {
@@ -133,8 +137,9 @@ impl GptContext {
                 error!("Request error: {:?}", err);
                 if let Some(code) = err.code {
                     if code == "context_length_exceeded" {
-                        self.context.remove(0);
-                        self.get_response().await
+                        // self.context.remove(0);
+                        // self.get_response().await
+                        Err("Context length exceeded")
                     } else {
                         Err("Request error")
                     }
@@ -148,19 +153,20 @@ impl GptContext {
 
     async fn new(name: &str, model: &str, key: &str) -> Result<Self, Box<dyn Error>> {
         let client = GptClient::new().with_api_key(key);
-        let context = vec![
-            // ChatCompletionRequestMessageArgs::default()
-            //     .role(Role::System)
-            //     .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. Do not address people in the conversation using mr/sir or any other form of respect.")
-            //     .build()
-            //     .unwrap(),
-            // ChatCompletionRequestMessageArgs::default()
-            //     .role(Role::User)
-            //     .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. Avoid formal addressing of people. If you address people, use the female form.")
-            //     .build()
-            //     .unwrap(),
-        ];
-        let token_count = get_chat_completion_max_tokens(model, &context)?;
+        // let context = vec![
+        // ChatCompletionRequestMessageArgs::default()
+        //     .role(Role::System)
+        //     .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. Do not address people in the conversation using mr/sir or any other form of respect.")
+        //     .build()
+        //     .unwrap(),
+        // ChatCompletionRequestMessageArgs::default()
+        //     .role(Role::User)
+        //     .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. Avoid formal addressing of people. If you address people, use the female form.")
+        //     .build()
+        //     .unwrap(),
+        // ];
+        let context = HashMap::new();
+        let token_count = HashMap::new();
         Ok(Self {
             name: name.to_owned(),
             client,
@@ -171,15 +177,19 @@ impl GptContext {
         })
     }
 
-    async fn manage_tokens(&mut self) {
-        self.token_count = get_chat_completion_max_tokens(&self.model, &self.context)
+    async fn manage_tokens(&mut self, channel_id: &str) {
+        let mut context = self.get_context_for_id(channel_id);
+        let mut token_count = get_chat_completion_max_tokens(&self.model, &context)
             .expect("Failed to get max tokens");
-        while self.token_count < 750 {
+        while token_count < 750 {
             info!("Reached max token count, removing oldest message from context");
-            self.context.remove(0);
-            self.token_count = get_chat_completion_max_tokens(&self.model, &self.context)
+            context.remove(0);
+            token_count = get_chat_completion_max_tokens(&self.model, &context)
                 .expect("Failed to get max tokens");
         }
+
+        self.token_count
+            .insert(channel_id.to_owned(), u16::try_from(token_count).unwrap());
     }
 
     async fn insert_message(&mut self, message: &DiscordMessage) {
@@ -224,7 +234,11 @@ impl GptContext {
         content = content.trim().to_owned();
         debug!("end message content: {}", content);
 
-        self.context.push(
+        // insert into context for channel id
+        let channel_id = message.channel.to_string();
+        let mut context = self.get_context_for_id(&channel_id);
+
+        context.push(
             ChatCompletionRequestMessageArgs::default()
                 .role(Role::User)
                 .content(&content)
@@ -232,6 +246,23 @@ impl GptContext {
                 .build()
                 .unwrap(),
         );
+
+        self.set_context_for_id(&channel_id, context);
+    }
+
+    fn set_context_for_id(
+        &mut self,
+        channel_id: &String,
+        context: Vec<ChatCompletionRequestMessage>,
+    ) {
+        self.context.insert(channel_id.clone(), context);
+    }
+
+    fn get_context_for_id(&self, channel_id: &str) -> Vec<ChatCompletionRequestMessage> {
+        match self.context.contains_key(channel_id) {
+            true => self.context.get(channel_id).unwrap().to_owned(),
+            false => vec![],
+        }
     }
 }
 
@@ -370,11 +401,11 @@ async fn main() {
 
     let mut async_client = mqtt::AsyncClient::new(create_opts).unwrap();
     let stream = async_client.get_stream(25);
-    let mqtt_client = Arc::new(Mutex::new(async_client)) ;
+    let mqtt_client = Arc::new(Mutex::new(async_client));
 
     {
         let client = mqtt_client.lock().await;
-    
+
         client.connect(None).await.unwrap();
         info!("MQTT connected");
         client.subscribe_many(TOPICS, QOS).await.unwrap();
@@ -415,8 +446,14 @@ async fn main() {
                         serde_json::from_str(&json_string).unwrap();
 
                     gpt.insert_message(&discord_message).await;
-                    gpt.manage_tokens().await;
-                    trace!("remaining token count: {}", gpt.token_count);
+                    gpt.manage_tokens(&discord_message.channel.to_string())
+                        .await;
+                    trace!(
+                        "remaining token count: {}",
+                        gpt.token_count
+                            .get(&discord_message.channel.to_string())
+                            .unwrap_or(&0)
+                    );
 
                     if discord_message.author.to_lowercase() != gpt.name.to_lowercase()
                         && discord_message
@@ -429,7 +466,10 @@ async fn main() {
                             *channel = discord_message.channel.to_string();
                         } // drop lock
 
-                        let response = gpt.get_response().await.unwrap(); // split message only if needed as discord has a 2k character limit
+                        let response = gpt
+                            .get_response(&discord_message.channel.to_string())
+                            .await
+                            .unwrap(); // split message only if needed as discord has a 2k character limit
                         debug!("response: {}", response);
 
                         let json = serde_json::to_string(&DiscordSend {
@@ -447,7 +487,7 @@ async fn main() {
                             .publish(send_message)
                             .await
                             .expect("Failed to send message");
-                        
+
                         {
                             let mut channel = channel.lock().await;
                             *channel = String::new();
