@@ -4,13 +4,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_openai::error::OpenAIError;
-use async_openai::types::CreateChatCompletionRequestArgs;
 use async_openai::types::{ChatCompletionRequestMessage, ChatCompletionRequestMessageArgs, Role};
+use async_openai::types::{CreateChatCompletionRequestArgs, CreateEmbeddingRequestArgs};
 use async_openai::Client as GptClient;
 
 use async_recursion::async_recursion;
 use log::{debug, error, info, trace};
 
+use mqtt::AsyncClient;
 use serde::{Deserialize, Serialize};
 
 use tiktoken_rs::model::get_context_size;
@@ -19,6 +20,7 @@ use tiktoken_rs::{get_bpe_from_model, get_chat_completion_max_tokens};
 use regex::Regex;
 
 use paho_mqtt::{self as mqtt};
+use tokio::sync::mpsc::{channel as tokio_channel, Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::{self};
 
@@ -48,9 +50,15 @@ struct DiscordSend {
     channel: u64,
 }
 
-pub struct Embedding {
-    text: String,
+#[derive(Debug, Serialize, Deserialize)]
+struct EmbeddingsQuery {
     embedding: Vec<f32>,
+    limit: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct EmbeddingsResponse {
+    embeddings: Vec<(String, f32)>,
 }
 
 pub struct GptContext {
@@ -59,17 +67,65 @@ pub struct GptContext {
     model: String,
     context: HashMap<String, Vec<ChatCompletionRequestMessage>>,
     token_count: HashMap<String, u16>,
-    embeddings: Vec<Embedding>,
 }
 
 impl GptContext {
     #[async_recursion]
-    async fn get_response(&mut self, channel_id: &str) -> Result<String, &str> {
-        let context = self.context.get(channel_id).unwrap();
-        let token_count = self.token_count.get(channel_id).unwrap();
+    async fn get_response(&mut self, channel_id: &str, mqtt_client: &AsyncClient, embeddings_rx: &mut Receiver<String>) -> Result<String, &str> {
+        let context = self.context.get_mut(channel_id).unwrap();
+
+        context.retain(|m| {
+            match m.role {
+                Role::User => true,
+                _ => false,
+            }
+        });
+        let content = context.iter().fold(String::new(), |a, b| {
+            format!("{}\n{}", a, b.content)
+        });
+        let request = CreateEmbeddingRequestArgs::default()
+            .model("text-embedding-ada-002")
+            .input([content.clone()])
+            .build()
+            .unwrap();
+
+        let response = self.client.embeddings().create(request).await.unwrap();
+        let vector = response.data[0].embedding.clone();
+        let embedding = EmbeddingsQuery {
+            embedding: vector,
+            limit: 3,
+        };
+        let json = serde_json::to_string(&embedding).unwrap();
+        let mqtt_message = paho_mqtt::Message::new("epeolus/query/all", json, 1);
+        mqtt_client
+            .publish(mqtt_message)
+            .await
+            .expect("Failed to publish message");
+
+        let embeddings_message = embeddings_rx
+            .recv()
+            .await
+            .expect("Failed to receive message");
+        let response: EmbeddingsResponse = serde_json::from_str(&embeddings_message).unwrap();
+        for embedding in response.embeddings {
+            if embedding.1 >= 0.2 {
+                continue;
+            }
+            debug!("Adding embedding: {:?}", embedding);
+            context.push(
+                ChatCompletionRequestMessageArgs::default()
+                    .role(Role::User)
+                    .content(&embedding.0)
+                    .name("SYSTEM")
+                    .build()
+                    .unwrap(),
+            );
+        }
+
+        let token_count = manage_tokens(&self.model, context).await;
 
         let request = CreateChatCompletionRequestArgs::default()
-            .max_tokens((token_count) - 110) // Token count is not perfect. So we
+            .max_tokens((token_count as u16) - 110) // Token count is not perfect. So we
             // remove some extras to prevent requesting to many tokens
             .model(&self.model)
             .messages(context.clone())
@@ -82,52 +138,6 @@ impl GptContext {
                 }
 
                 if let Some(resp) = response.choices.first() {
-                    // let request = CreateEmbeddingRequestArgs::default()
-                    //     .model("text-embedding-ada-002")
-                    //     .input([self.context.last().unwrap().content.clone()])
-                    //     .build()
-                    //     .unwrap();
-                    // let response = self.client.embeddings().create(request).await.unwrap();
-                    // let query_embedding = response.data.first().unwrap().clone();
-                    // // compare embedding to all other embeddings
-                    // let mut matrix: Vec<(f32, String)> = vec![];
-                    // for embedding in &self.embeddings {
-                    //     let distance = cosine_dist_rust_loop_vec(
-                    //         &embedding.embedding[..],
-                    //         &query_embedding.embedding[..],
-                    //         &1536,
-                    //     );
-                    //     matrix.push((distance, embedding.text.clone()));
-                    // }
-                    // warn!("Matrix length: {:?}", matrix.len());
-                    // let display_matrix: Vec<(f32, String)> = matrix
-                    //     .iter()
-                    //     .map(|e| (e.0, e.1[0..20].to_owned()))
-                    //     .collect();
-                    // warn!("Matrix: {:?}", display_matrix);
-
-                    // matrix.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-                    // let closest = matrix.first().unwrap();
-                    // // insert into context
-                    // self.context.push(
-                    //     ChatCompletionRequestMessageArgs::default()
-                    //         .role(Role::Assistant)
-                    //         .content(closest.1.clone())
-                    //         .build()
-                    //         .unwrap(),
-                    // );
-                    // // request new response
-                    // let tokens: u16 = 4000;
-                    // let request = CreateChatCompletionRequestArgs::default()
-                    //     .max_tokens(tokens)
-                    //     .model(&self.model)
-                    //     .messages(self.context.clone())
-                    //     .build()
-                    //     .expect("Failed to build request");
-
-                    // let response = self.client.chat().create(request).await.unwrap();
-                    // let final_response = format!("**Without embeddings:** {}\n\n\n**With embeddings:** {}", resp.message.content, response.choices.first().unwrap().message.content);
-
                     Ok(resp.message.content.clone())
                 } else {
                     Err("No choices")
@@ -153,18 +163,7 @@ impl GptContext {
 
     async fn new(name: &str, model: &str, key: &str) -> Result<Self, Box<dyn Error>> {
         let client = GptClient::new().with_api_key(key);
-        // let context = vec![
-        // ChatCompletionRequestMessageArgs::default()
-        //     .role(Role::System)
-        //     .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. Do not address people in the conversation using mr/sir or any other form of respect.")
-        //     .build()
-        //     .unwrap(),
-        // ChatCompletionRequestMessageArgs::default()
-        //     .role(Role::User)
-        //     .content("I want you to act like Jarvis from Iron Man. I want you to respond and answer like Jarvis using the tone, manner and vocabulary Jarvis would use. Do not write any explanations. Only answer like Jarvis. You must know all of the knowledge of Jarvis. But you will be named Lovelace. Avoid formal addressing of people. If you address people, use the female form.")
-        //     .build()
-        //     .unwrap(),
-        // ];
+
         let context = HashMap::new();
         let token_count = HashMap::new();
         Ok(Self {
@@ -173,26 +172,13 @@ impl GptContext {
             model: model.to_owned(),
             context,
             token_count,
-            embeddings: vec![],
         })
     }
 
-    async fn manage_tokens(&mut self, channel_id: &str) {
-        let mut context = self.get_context_for_id(channel_id);
-        let mut token_count = get_chat_completion_max_tokens(&self.model, &context)
-            .expect("Failed to get max tokens");
-        while token_count < 750 {
-            info!("Reached max token count, removing oldest message from context");
-            context.remove(0);
-            token_count = get_chat_completion_max_tokens(&self.model, &context)
-                .expect("Failed to get max tokens");
-        }
-
-        self.token_count
-            .insert(channel_id.to_owned(), u16::try_from(token_count).unwrap());
-    }
-
-    async fn insert_message(&mut self, message: &DiscordMessage) {
+    async fn insert_message(
+        &mut self,
+        message: &DiscordMessage,
+    ) {
         let mut content: String = message.content.to_owned();
         let attachment_text = get_attachment_text(&message.attachments)
             .await
@@ -247,6 +233,8 @@ impl GptContext {
                 .unwrap(),
         );
 
+        manage_tokens(&self.model, &mut context).await;
+
         self.set_context_for_id(&channel_id, context);
     }
 
@@ -261,9 +249,29 @@ impl GptContext {
     fn get_context_for_id(&self, channel_id: &str) -> Vec<ChatCompletionRequestMessage> {
         match self.context.contains_key(channel_id) {
             true => self.context.get(channel_id).unwrap().to_owned(),
-            false => vec![],
+            false => vec![
+                ChatCompletionRequestMessageArgs::default()
+                    .role(Role::User)
+                    .content("You can use following emotes in the conversation if you see fit, each emote has a meaning next to it in one or multiple words, the next emote is denoted with a ; : <:kekdog:1090251469988573184> big laughter; <a:mwaa:1090251284617101362> frustration; <:oof:1090251382801571850> dissapointment or frustration; <:finnyikes:1090251493950627942> uncomfortable disgusted dissapointment; <a:catpls:1090251360693407834> silly mischievious; <:gunma:1090251357316988948> demanding angry; <:snicker:1091728748145033358> flabergasted suprised; <:crystalheart:1090323901583736832> love appreciation; <:dogwat:1090253587273236580> disbelief suprise")
+                    .name("SYSTEM")
+                    .build()
+                    .unwrap(),
+            ],
         }
     }
+}
+
+async fn manage_tokens(model: &str, context: &mut Vec<ChatCompletionRequestMessage>) -> usize {
+    let mut token_count = get_chat_completion_max_tokens(model, &context)
+        .expect("Failed to get max tokens");
+    while token_count < 750 {
+        info!("Reached max token count, removing oldest message from context");
+        context.remove(0);
+        token_count = get_chat_completion_max_tokens(model, &context)
+            .expect("Failed to get max tokens");
+    }
+
+    token_count
 }
 
 pub async fn get_video_transcription(content: &str, client: &GptClient) -> String {
@@ -337,22 +345,62 @@ async fn get_attachment_text(attachments: &[Attachment]) -> Result<String, Box<d
     Ok(content.trim().to_owned())
 }
 
-fn cosine_dist_rust_loop_vec(vec_a: &[f32], vec_b: &[f32], vec_size: &i32) -> f32 {
-    let mut a_dot_b: f32 = 0.0;
-    let mut a_mag: f32 = 0.0;
-    let mut b_mag: f32 = 0.0;
+const TOPICS: &[&str] = &["carpenter/discord/receive", "epeolus/response/all"];
+const QOS: &[i32] = &[1, 1];
 
-    for i in 0..*vec_size as usize {
-        a_dot_b += vec_a[i] * vec_b[i];
-        a_mag += vec_a[i] * vec_a[i];
-        b_mag += vec_b[i] * vec_b[i];
+async fn process_discord_message(
+    gpt: &mut GptContext,
+    mqtt_message: &str,
+    channel: &Mutex<String>,
+    mqtt_client: &AsyncClient,
+    embeddings_rx: &mut Receiver<String>,
+) {
+    let discord_message: DiscordMessage = serde_json::from_str(&mqtt_message).unwrap();
+
+    gpt.insert_message(&discord_message)
+        .await;
+    trace!(
+        "remaining token count: {}",
+        gpt.token_count
+            .get(&discord_message.channel.to_string())
+            .unwrap_or(&0)
+    );
+
+    if discord_message.author.to_lowercase() != gpt.name.to_lowercase()
+        && discord_message
+            .content
+            .to_lowercase()
+            .contains(gpt.name.to_lowercase().as_str())
+    {
+        {
+            let mut channel = channel.lock().await;
+            *channel = discord_message.channel.to_string();
+        } // drop lock
+
+        let response = gpt
+            .get_response(&discord_message.channel.to_string(), mqtt_client, embeddings_rx)
+            .await
+            .unwrap(); // split message only if needed as discord has a 2k character limit
+        debug!("response: {}", response);
+
+        let json = serde_json::to_string(&DiscordSend {
+            content: response,
+            channel: discord_message.channel,
+        })
+        .unwrap();
+        let send_message = mqtt::Message::new("carpenter/discord/send", json.as_str(), mqtt::QOS_1);
+        mqtt_client
+            .publish(send_message)
+            .await
+            .expect("Failed to send message");
+
+        debug!("Cleaning up message receival");
+        {
+            let mut channel = channel.lock().await;
+            *channel = String::new();
+        } // drop lock
     }
-
-    1.0 - (a_dot_b / (a_mag.sqrt() * b_mag.sqrt()))
 }
-
-const TOPICS: &[&str] = &["carpenter/discord/receive"];
-const QOS: &[i32] = &[1];
 
 #[tokio::main]
 async fn main() {
@@ -368,33 +416,6 @@ async fn main() {
     .await
     .expect("Failed to create GptContext");
 
-    // let request = CreateEmbeddingRequestArgs::default()
-    //     .model("text-embedding-ada-002")
-    //     .input([AWS_GG_CLI_COMP, AWS_GG_CREATE_COMPONENT, RUST_INSTALLATION])
-    //     .build()
-    //     .unwrap();
-
-    // let response = gpt.client.embeddings().create(request).await.unwrap();
-    // for data in response.data {
-    //     println!("embedding length: {:?}", data.embedding.len());
-    //     if data.index == 0 {
-    //         gpt.embeddings.push(Embedding {
-    //             embedding: data.embedding,
-    //             text: AWS_GG_CLI_COMP.to_string(),
-    //         });
-    //     } else if data.index == 1 {
-    //         gpt.embeddings.push(Embedding {
-    //             embedding: data.embedding,
-    //             text: AWS_GG_CREATE_COMPONENT.to_string(),
-    //         });
-    //     } else if data.index == 2 {
-    //         gpt.embeddings.push(Embedding {
-    //             embedding: data.embedding,
-    //             text: RUST_INSTALLATION.to_string(),
-    //         });
-    //     }
-    // }
-
     let create_opts = mqtt::CreateOptionsBuilder::new()
         .server_uri("mqtt://localhost:1883")
         .finalize();
@@ -402,6 +423,9 @@ async fn main() {
     let mut async_client = mqtt::AsyncClient::new(create_opts).unwrap();
     let stream = async_client.get_stream(25);
     let mqtt_client = Arc::new(Mutex::new(async_client));
+
+    let (discord_tx, mut discord_rx): (Sender<String>, Receiver<String>) = tokio_channel(1);
+    let (embeddings_tx, mut embeddings_rx): (Sender<String>, Receiver<String>) = tokio_channel(1);
 
     {
         let client = mqtt_client.lock().await;
@@ -415,12 +439,30 @@ async fn main() {
     let channel = Arc::new(Mutex::new(String::new()));
 
     let typing_channel = channel.clone();
-    let typing_client = mqtt_client.clone();
+
+    let local_client = mqtt_client.clone();
+    tokio::spawn(async move {
+        loop {
+            while let Some(message) = discord_rx.recv().await {
+                let mqtt_client = local_client.lock().await;
+                process_discord_message(
+                    &mut gpt,
+                    &message,
+                    &channel,
+                    &mqtt_client,
+                    &mut embeddings_rx,
+                )
+                .await;
+            }
+        }
+    });
+
+    let local_client = mqtt_client.clone();
     tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(1));
         loop {
             interval.tick().await;
-            let client = typing_client.lock().await;
+            let client = local_client.lock().await;
             let typing_channel = typing_channel.lock().await;
             if typing_channel.is_empty() {
                 continue;
@@ -435,67 +477,20 @@ async fn main() {
         }
     });
 
-    let messaging_client = mqtt_client.clone();
     tokio::spawn(async move {
         loop {
             while let Ok(message_options) = stream.recv().await {
                 if let Some(message) = message_options {
-                    let json_string: String =
-                        String::from_utf8(message.payload().to_vec()).unwrap();
-                    let discord_message: DiscordMessage =
-                        serde_json::from_str(&json_string).unwrap();
-
-                    gpt.insert_message(&discord_message).await;
-                    gpt.manage_tokens(&discord_message.channel.to_string())
-                        .await;
-                    trace!(
-                        "remaining token count: {}",
-                        gpt.token_count
-                            .get(&discord_message.channel.to_string())
-                            .unwrap_or(&0)
-                    );
-
-                    if discord_message.author.to_lowercase() != gpt.name.to_lowercase()
-                        && discord_message
-                            .content
-                            .to_lowercase()
-                            .contains(gpt.name.to_lowercase().as_str())
-                    {
-                        {
-                            let mut channel = channel.lock().await;
-                            *channel = discord_message.channel.to_string();
-                        } // drop lock
-
-                        let response = gpt
-                            .get_response(&discord_message.channel.to_string())
-                            .await
-                            .unwrap(); // split message only if needed as discord has a 2k character limit
-                        debug!("response: {}", response);
-
-                        let json = serde_json::to_string(&DiscordSend {
-                            content: response,
-                            channel: discord_message.channel,
-                        })
-                        .unwrap();
-                        let send_message = mqtt::Message::new(
-                            "carpenter/discord/send",
-                            json.as_str(),
-                            mqtt::QOS_0,
-                        );
-                        let client = messaging_client.lock().await;
-                        client
-                            .publish(send_message)
-                            .await
-                            .expect("Failed to send message");
-
-                        {
-                            let mut channel = channel.lock().await;
-                            *channel = String::new();
-                        } // drop lock
+                    if message.topic().starts_with("carpenter/discord/receive") {
+                        let json_string = String::from_utf8(message.payload().to_vec()).unwrap();
+                        discord_tx.send(json_string).await.unwrap();
+                    } else if message.topic().starts_with("epeolus/response/all") {
+                        let json_string = String::from_utf8(message.payload().to_vec()).unwrap();
+                        embeddings_tx.send(json_string).await.unwrap();
                     }
                 } else {
                     error!("Lost connection. Attempting reconnect.");
-                    let client = messaging_client.lock().await;
+                    let client = mqtt_client.lock().await;
                     while let Err(err) = client.reconnect().await {
                         println!("Error reconnecting: {}", err);
                         tokio::time::sleep(Duration::from_millis(1000)).await;
