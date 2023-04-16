@@ -79,6 +79,11 @@ impl Handler<DiscordMessage> for OpenaiActor {
         if msg.author.to_lowercase() == name.to_lowercase() {
             return;
         }
+
+        if !msg.content.contains(&name) {
+            return;
+        }
+        
         debug!("Spawning future for channel: {}", msg.channel);
         let client = self.client.clone();
         let request = self.generate_response(msg.channel);
