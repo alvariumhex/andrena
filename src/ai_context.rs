@@ -17,7 +17,7 @@ impl AiContext {
 
     pub fn set_static_context(&mut self, context: &str) {
         self.static_context = vec![
-            "Systems status is degraded: \n - typing indicator not operational\n - embedding not operational\n - video transcription is not operational\n - attachment extraction is not available\n - article extraction is not available\nReason: systems is undergoing maintenance".to_owned(),
+            "Systems status is degraded: \n - embedding not operational\n - video transcription is not operational\n - attachment extraction is not available\n - article extraction is not available\nReason: systems is undergoing maintenance".to_owned(),
             context.to_owned()
         ];
     }

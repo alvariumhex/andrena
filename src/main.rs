@@ -26,6 +26,7 @@ use actors::mqtt_actor::MqttActor;
 
 use crate::actors::mqtt_actor::MqttMessage;
 use crate::actors::openai_actor::OpenaiActor;
+use crate::actors::typing_actor::TypingActor;
 
 mod actors;
 mod ai_context;
@@ -187,92 +188,17 @@ impl GptContext {
         })
     }
 
-    async fn insert_message(&mut self, message: &DiscordMessage) {
-        let mut content: String = message.content.to_owned();
-
-        content = content.trim().to_owned();
-        let model = self.model.clone();
-
-        // insert into context for channel id
-        let channel_id = message.channel.to_string();
-        let context = self.get_context_for_id(&channel_id);
-        context.push_history((message.author.clone(), content.clone()));
-        context.manage_tokens(&model);
-    }
-
-    fn get_context_for_id(&mut self, channel_id: &str) -> &mut AiContext {
-        match self.context.contains_key(channel_id) {
-            true => self.context.get_mut(channel_id).unwrap(),
-            false => {
-                let mut context = AiContext::new();
-                context.set_static_context("You can use following emotes in the conversation if you see fit, each emote has a meaning next to it in one or multiple words, the next emote is denoted with a ; : <:kekdog:1090251469988573184> big laughter; <a:mwaa:1090251284617101362> frustration; <:oof:1090251382801571850> dissapointment or frustration; <:finnyikes:1090251493950627942> uncomfortable disgusted dissapointment; <a:catpls:1090251360693407834> silly mischievious; <:gunma:1090251357316988948> demanding angry; <:snicker:1091728748145033358> flabergasted suprised; <:crystalheart:1090323901583736832> love appreciation; <:dogwat:1090253587273236580> disbelief suprise");
-                self.context.insert(channel_id.to_owned(), context);
-                self.context.get_mut(channel_id).unwrap()
-            }
-        }
-    }
 }
 
 const TOPICS: &[&str] = &["carpenter/discord/receive", "epeolus/response/all"];
 const QOS: &[i32] = &[1, 1];
-
-async fn process_discord_message(
-    gpt: &mut GptContext,
-    mqtt_message: &str,
-    channel: &Mutex<String>,
-    mqtt_client: &AsyncClient,
-    embeddings_rx: &mut Receiver<String>,
-) {
-    let discord_message: DiscordMessage = serde_json::from_str(&mqtt_message).unwrap();
-
-    gpt.insert_message(&discord_message).await;
-    if discord_message.author.to_lowercase() != gpt.name.to_lowercase()
-        && discord_message
-            .content
-            .to_lowercase()
-            .contains(gpt.name.to_lowercase().as_str())
-    {
-        {
-            debug!("Setting channel to: {}", discord_message.channel);
-            let mut channel = channel.lock().await;
-            *channel = discord_message.channel.to_string();
-        } // drop lock
-
-        let response = gpt
-            .get_response(
-                &discord_message.channel.to_string(),
-                mqtt_client,
-                embeddings_rx,
-            )
-            .await
-            .unwrap(); // split message only if needed as discord has a 2k character limit
-        debug!("response: {}", response);
-
-        let json = serde_json::to_string(&DiscordSend {
-            content: response,
-            channel: discord_message.channel,
-        })
-        .unwrap();
-        let send_message = mqtt::Message::new("carpenter/discord/send", json.as_str(), mqtt::QOS_1);
-        mqtt_client
-            .publish(send_message)
-            .await
-            .expect("Failed to send message");
-
-        debug!("Cleaning up message receival");
-        {
-            let mut channel = channel.lock().await;
-            *channel = String::new();
-        } // drop lock
-    }
-}
 
 #[actix_rt::main]
 async fn main() {
     pretty_env_logger::formatted_builder()
         .filter(Some("andrena"), log::LevelFilter::Trace)
         .init();
-    
+
     let create_opts = mqtt::CreateOptionsBuilder::new()
         .server_uri("mqtt://localhost:1883")
         .finalize();
@@ -290,36 +216,16 @@ async fn main() {
         info!("Subscribed to: {:?}", TOPICS);
     }
 
-    let channel = Arc::new(Mutex::new(String::new()));
-
-    let typing_channel = channel.clone();
-
-    let local_client = mqtt_client.clone();
-    let typing_task = tokio::task::spawn(async move {
-        let mut interval = time::interval(Duration::from_secs(1));
-        loop {
-            interval.tick().await;
-            let client = local_client.lock().await;
-            let typing_channel = typing_channel.lock().await;
-            // debug!("typing channel: {}", typing_channel);
-            if typing_channel.is_empty() {
-                continue;
-            }
-            trace!("sending typing message: {}", typing_channel);
-            let typing_message = mqtt::Message::new(
-                "carpenter/discord/typing",
-                typing_channel.clone(),
-                mqtt::QOS_0,
-            );
-            client.publish(typing_message);
-        }
-    });
-
     let gpt = GptContext::new(
         "Lovelace",
         "gpt-3.5-turbo",
         "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",
     ).await.unwrap();
+
+    let typing_actor = TypingActor {
+        mqtt_actor: None,
+        channels: vec![],
+    }.start();
 
     let openai_actor = OpenaiActor {
         client: gpt.client.clone(),
@@ -327,6 +233,7 @@ async fn main() {
         context: HashMap::new(),
         model: "gpt-3.5-turbo".to_owned(),
         mqtt_actor: None,
+        typing_actor: typing_actor.clone(),
     }.start();
 
     let mqtt_actor = MqttActor {
@@ -335,8 +242,9 @@ async fn main() {
     }.start();
 
     openai_actor.send(RegisterActor(mqtt_actor.clone())).await.unwrap();
+    typing_actor.send(RegisterActor(mqtt_actor.clone())).await.unwrap();
 
-    let mqtt_task = tokio::spawn(async move {
+   tokio::spawn(async move {
         loop {
             while let Ok(message_options) = stream.recv().await {
                 if let Some(message) = message_options {
@@ -353,7 +261,5 @@ async fn main() {
                 }
             }
         }
-    });
-
-    join!(mqtt_task, typing_task);
+    }).await.unwrap();
 }

@@ -13,6 +13,10 @@ use super::openai_actor::OpenaiActor;
 #[rtype(result = "()")]
 pub struct MqttMessage(pub PahoMqttMessage);
 
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct SendTyping(pub u64);
+
 pub struct MqttActor {
     pub openai_actor: Addr<OpenaiActor>,
     pub client: Arc<Mutex<paho_mqtt::AsyncClient>>,
@@ -45,6 +49,25 @@ impl Handler<DiscordSend> for MqttActor {
         Box::pin(async move {
             let json_string = serde_json::to_string(&msg).unwrap();
             let message = PahoMqttMessage::new("carpenter/discord/send", json_string, 1);
+            client
+                .lock()
+                .await
+                .publish(message)
+                .await
+                .expect("Failed to send message");
+            ()
+        })
+    }
+}
+
+impl Handler<SendTyping> for MqttActor {
+    type Result = ResponseFuture<()>;
+
+    fn handle(&mut self, msg: SendTyping, _ctx: &mut Context<Self>) -> Self::Result {
+        let client = self.client.clone();
+        info!("Sending typing to discord for channel: {}", msg.0);
+        Box::pin(async move {
+            let message = PahoMqttMessage::new("carpenter/discord/typing", msg.0.to_string(), 1);
             client
                 .lock()
                 .await

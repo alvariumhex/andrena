@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use actix::{
-    Actor, Addr, AsyncContext, Context, Handler, WrapFuture
-};
+use actix::{Actor, Addr, AsyncContext, Context, Handler, WrapFuture};
 use async_openai::{
     types::{CreateChatCompletionRequest, CreateChatCompletionRequestArgs},
     Client,
@@ -10,9 +8,9 @@ use async_openai::{
 use log::{debug, error, info};
 use tiktoken_rs::get_chat_completion_max_tokens;
 
-use crate::{ai_context::AiContext, DiscordMessage, DiscordSend, RegisterActor};
+use crate::{ai_context::AiContext, DiscordMessage, DiscordSend, RegisterActor, actors::typing_actor::TypingMessage};
 
-use super::mqtt_actor::MqttActor;
+use super::{mqtt_actor::MqttActor, typing_actor::TypingActor};
 
 pub struct OpenaiActor {
     pub name: String,
@@ -20,6 +18,7 @@ pub struct OpenaiActor {
     pub model: String,
     pub context: HashMap<String, AiContext>,
     pub mqtt_actor: Option<Addr<MqttActor>>,
+    pub typing_actor: Addr<TypingActor>
 }
 
 impl OpenaiActor {
@@ -80,52 +79,54 @@ impl Handler<DiscordMessage> for OpenaiActor {
             return;
         }
 
-        if !msg.content.contains(&name) {
+        if !msg.content.to_lowercase().contains(&name.to_lowercase()) {
             return;
         }
-        
+
+        self.typing_actor.do_send(TypingMessage {
+            typing: true,
+            channel: msg.channel
+        });
+
         debug!("Spawning future for channel: {}", msg.channel);
+        // There has to be a better way to do this but I'm not sure how
         let client = self.client.clone();
         let request = self.generate_response(msg.channel);
         let mqtt_actor = self.mqtt_actor.clone().unwrap();
+        let typing_actor = self.typing_actor.clone();
         let channel = msg.channel;
         let ac_fut = Box::pin(async move {
             let response = client.chat().create(request).await;
-            match response {
+            let response_text = match response {
                 Ok(response) => {
                     if let Some(usage) = response.usage {
                         debug!("tokens: {}", usage.total_tokens);
                     }
                     debug!("response: {}", response.choices[0].message.content);
                     if let Some(resp) = response.choices.first() {
-                        mqtt_actor
-                            .send(DiscordSend {
-                                channel: channel,
-                                content: resp.message.content.clone(),
-                            })
-                            .await
-                            .unwrap();
+                        resp.message.content.clone()
                     } else {
-                        mqtt_actor
-                            .send(DiscordSend {
-                                channel: channel,
-                                content: "Failed to generate response: No choices".to_owned(),
-                            })
-                            .await
-                            .unwrap();
+                        "Failed to generate response: No choices".to_owned()
                     }
                 }
                 Err(e) => {
                     error!("Failed to generate response: {:?}", e);
-                    mqtt_actor
-                        .send(DiscordSend {
-                            channel: channel,
-                            content: "Failed to generate response".to_owned(),
-                        })
-                        .await
-                        .unwrap();
+                    "Failed to generate response".to_owned()
                 }
-            }
+            };
+
+            typing_actor.do_send(TypingMessage {
+                typing: false,
+                channel: msg.channel
+            });
+
+            mqtt_actor
+                .send(DiscordSend {
+                    channel: channel,
+                    content: response_text,
+                })
+                .await
+                .unwrap();
         })
         .into_actor(self);
         ctx.spawn(ac_fut);
