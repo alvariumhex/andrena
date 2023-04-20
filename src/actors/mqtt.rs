@@ -5,7 +5,7 @@ use log::{trace, info};
 use paho_mqtt::Message as PahoMqttMessage;
 use tokio::sync::Mutex;
 
-use crate::{DiscordMessage, DiscordSend, EmbeddingsRequest, Embedding};
+use crate::{DiscordMessage, DiscordSend, EmbeddingsRequest, Embedding, EmbeddingsResponse};
 
 use super::openai::OpenaiActor;
 
@@ -34,6 +34,10 @@ impl Handler<MqttMessage> for MqttActor {
             info!("Received message from discord: {}", json_string);
             self.openai_actor
                 .do_send(serde_json::from_str::<DiscordMessage>(&json_string).unwrap());
+        } else if msg.0.topic() == "epeolus/response/all" {
+            info!("Received embeddings response: {}", json_string);
+            let embeddings: Vec<(Embedding, f32)> = serde_json::from_str(&json_string).unwrap();
+            self.openai_actor.do_send(EmbeddingsResponse(embeddings));
         } else {
             trace!("Received message on {} at {}", msg.0.topic(), json_string);
         }
@@ -79,21 +83,20 @@ impl Handler<SendTyping> for MqttActor {
 }
 
 impl Handler<EmbeddingsRequest> for MqttActor {
-    type Result = ResponseFuture<Vec<(Embedding, f32)>>;
+    type Result = ResponseFuture<()>;
 
     fn handle(&mut self, msg: EmbeddingsRequest, _ctx: &mut Context<Self>) -> Self::Result {
         let client = self.client.clone();
-        info!("Sending embeddings request to discord: {}", msg.message);
+        info!("Sending embeddings request: {}", msg.message);
         Box::pin(async move {
             let json_string = serde_json::to_string(&msg).unwrap();
-            let message = PahoMqttMessage::new("carpenter/embeddings", json_string, 1);
+            let message = PahoMqttMessage::new("epeolus/query/all", json_string, 1);
             client
                 .lock()
                 .await
                 .publish(message)
                 .await
                 .expect("Failed to send message");
-            vec![]
         })
     }
 }

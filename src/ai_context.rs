@@ -4,6 +4,7 @@ use tiktoken_rs::{get_bpe_from_model, get_chat_completion_max_tokens};
 
 pub struct AiContext {
     pub static_context: Vec<String>,
+    pub embeddings: Vec<String>,
     pub history: Vec<(String, String)>,
 }
 
@@ -12,6 +13,7 @@ impl AiContext {
         AiContext {
             static_context: Vec::new(),
             history: Vec::new(),
+            embeddings: Vec::new(),
         }
     }
 
@@ -29,6 +31,17 @@ impl AiContext {
     pub fn to_chat_history(&self) -> Vec<ChatCompletionRequestMessage> {
         let mut chat: Vec<ChatCompletionRequestMessage> = Vec::new();
         for h in &self.static_context {
+            chat.push(
+                ChatCompletionRequestMessageArgs::default()
+                    .role(Role::User)
+                    .name("SYSTEM")
+                    .content(h)
+                    .build()
+                    .unwrap(),
+            );
+        }
+
+        for h in &self.embeddings {
             chat.push(
                 ChatCompletionRequestMessageArgs::default()
                     .role(Role::User)
@@ -64,10 +77,18 @@ impl AiContext {
         }
     }
 
+    pub fn clear_embeddings(&mut self) {
+        self.embeddings.clear();
+    }
+
     pub fn calculate_tokens(&self, model: &str) -> usize {
         let mut tokens = 0;
         let bpe = get_bpe_from_model(model).unwrap();
         for h in &self.static_context {
+            tokens += bpe.encode_ordinary(h).len();
+        }
+
+        for h in &self.embeddings {
             tokens += bpe.encode_ordinary(h).len();
         }
 

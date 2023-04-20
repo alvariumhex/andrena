@@ -8,7 +8,10 @@ use async_openai::{
 use log::{debug, error, info};
 use tiktoken_rs::get_chat_completion_max_tokens;
 
-use crate::{ai_context::AiContext, DiscordMessage, DiscordSend, RegisterActor, actors::typing::TypingMessage};
+use crate::{
+    actors::typing::TypingMessage, ai_context::AiContext, DiscordMessage, EmbeddingsRequest,
+    EmbeddingsResponse, RegisterActor, DiscordSend,
+};
 
 use super::{mqtt::MqttActor, typing::TypingActor};
 
@@ -18,7 +21,8 @@ pub struct OpenaiActor {
     pub model: String,
     pub context: HashMap<String, AiContext>,
     pub mqtt_actor: Option<Addr<MqttActor>>,
-    pub typing_actor: Addr<TypingActor>
+    pub typing_actor: Addr<TypingActor>,
+    pub channel: Option<u64>
 }
 
 impl OpenaiActor {
@@ -54,6 +58,16 @@ impl OpenaiActor {
             .build()
             .expect("Failed to build request")
     }
+
+    fn clear_embeddings(&mut self, channel: u64) {
+        let context = self.get_context_for_id(&channel.to_string());
+        context.clear_embeddings();
+    }
+
+    fn insert_embeddings(&mut self, channel: u64, embeddings: Vec<String>) {
+        let context = self.get_context_for_id(&channel.to_string());
+        context.embeddings = embeddings;
+    }
 }
 
 impl Actor for OpenaiActor {
@@ -85,16 +99,69 @@ impl Handler<DiscordMessage> for OpenaiActor {
 
         self.typing_actor.do_send(TypingMessage {
             typing: true,
-            channel: msg.channel
+            channel: msg.channel,
         });
 
-        debug!("Spawning future for channel: {}", msg.channel);
+        debug!("Spawning future for channel: {}", msg.channel.clone());
         // There has to be a better way to do this but I'm not sure how
         let client = self.client.clone();
+        self.clear_embeddings(msg.channel);
         let request = self.generate_response(msg.channel);
         let mqtt_actor = self.mqtt_actor.clone().unwrap();
+        self.channel = Some(msg.channel);
+        let ac_fut = Box::pin(async move {
+            let response = client.chat().create(request).await;
+            let response_text = match response {
+                Ok(response) => {
+                    if let Some(usage) = response.usage {
+                        debug!("tokens: {}", usage.total_tokens);
+                    }
+                    debug!("response: {}", response.choices[0].message.content);
+                    if let Some(resp) = response.choices.first() {
+                        resp.message.content.clone()
+                    } else {
+                        "Failed to generate response: No choices".to_owned()
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to generate response: {:?}", e);
+                    "Failed to generate response".to_owned()
+                }
+            };
+
+            mqtt_actor
+                .send(DiscordSend {
+                    channel: msg.channel,
+                    content: format!("***Without embeddings repsonse:*** {}", response_text),
+                })
+                .await
+                .unwrap();
+
+            mqtt_actor
+                .send(EmbeddingsRequest {
+                    message: msg.content,
+                    limit: 5,
+                })
+                .await
+                .unwrap()
+        })
+        .into_actor(self);
+        ctx.spawn(ac_fut);
+    }
+}
+
+impl Handler<EmbeddingsResponse> for OpenaiActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: EmbeddingsResponse, ctx: &mut Context<Self>) -> Self::Result {
+        debug!("Embeddings response: {:?}", msg);
+        let channel = self.channel.unwrap();
+        let client = self.client.clone();
+        let embeddings: Vec<String> = msg.0.iter().map(|x| x.0.metadata.get("content").unwrap().clone()).collect();
+        self.insert_embeddings(channel, embeddings);
+        let request = self.generate_response(channel);
+        let mqtt_actor = self.mqtt_actor.clone().unwrap();
         let typing_actor = self.typing_actor.clone();
-        let channel = msg.channel;
         let ac_fut = Box::pin(async move {
             let response = client.chat().create(request).await;
             let response_text = match response {
@@ -117,13 +184,13 @@ impl Handler<DiscordMessage> for OpenaiActor {
 
             typing_actor.do_send(TypingMessage {
                 typing: false,
-                channel: msg.channel
+                channel: channel,
             });
 
             mqtt_actor
                 .send(DiscordSend {
                     channel: channel,
-                    content: response_text,
+                    content: format!("***Embeddings repsonse:*** {}", response_text),
                 })
                 .await
                 .unwrap();

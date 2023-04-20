@@ -1,6 +1,6 @@
-use actix::{Addr, Actor, Handler, Context, Message, AsyncContext};
+use actix::{Actor, Addr, AsyncContext, Context, Handler, Message};
 use log::{info, trace};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::RegisterActor;
 
@@ -59,7 +59,6 @@ impl Handler<RegisterActor> for TypingActor {
     }
 }
 
-
 impl Handler<TypingMessage> for TypingActor {
     type Result = ();
 
@@ -68,12 +67,8 @@ impl Handler<TypingMessage> for TypingActor {
             if !self.channels.contains(&msg.channel) {
                 self.channels.push(msg.channel);
             }
-        } else {
-            if self.channels.contains(&msg.channel) {
-                self.channels.retain(|&x| x != msg.channel);
-            }
+        } else if self.channels.contains(&msg.channel) {
+            self.channels.retain(|&x| x != msg.channel);
         }
     }
 }
-
-

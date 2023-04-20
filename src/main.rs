@@ -18,12 +18,17 @@ use crate::actors::typing::TypingActor;
 mod actors;
 mod ai_context;
 
+// Vec<(Embedding, f32)>
 #[derive(Debug, Clone, Serialize, Deserialize, Message)]
-#[rtype(result = "Vec<(Embedding, f32)>")]
+#[rtype(result = "")]
 pub struct EmbeddingsRequest {
     pub message: String,
     pub limit: usize,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Message)]
+#[rtype(result = "()")]
+pub struct EmbeddingsResponse(pub Vec<(Embedding, f32)>);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Message)]
 #[rtype(result = "()")]
@@ -33,7 +38,6 @@ pub struct Embedding {
     pub id: String,
     pub timestamp: u64,
 }
-
 
 #[derive(Serialize, Deserialize, Message)]
 #[rtype(result = "()")]
@@ -103,6 +107,7 @@ async fn main() {
         model: "gpt-3.5-turbo".to_owned(),
         mqtt_actor: None,
         typing_actor: typing_actor.clone(),
+        channel: None
     }.start();
 
     let mqtt_actor = MqttActor {
