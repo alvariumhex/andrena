@@ -9,8 +9,8 @@ use log::{debug, error, info};
 use tiktoken_rs::get_chat_completion_max_tokens;
 
 use crate::{
-    actors::typing::TypingMessage, ai_context::AiContext, DiscordMessage, EmbeddingsRequest,
-    EmbeddingsResponse, RegisterActor, DiscordSend,
+    actors::typing::TypingMessage, ai_context::AiContext, DiscordMessage, DiscordSend,
+    EmbeddingsRequest, EmbeddingsResponse, RegisterActor,
 };
 
 use super::{mqtt::MqttActor, typing::TypingActor};
@@ -22,7 +22,7 @@ pub struct OpenaiActor {
     pub context: HashMap<String, AiContext>,
     pub mqtt_actor: Option<Addr<MqttActor>>,
     pub typing_actor: Addr<TypingActor>,
-    pub channel: Option<u64>
+    pub channel: Option<u64>,
 }
 
 impl OpenaiActor {
@@ -67,6 +67,7 @@ impl OpenaiActor {
     fn insert_embeddings(&mut self, channel: u64, embeddings: Vec<String>) {
         let context = self.get_context_for_id(&channel.to_string());
         context.embeddings = embeddings;
+        context.embeddings.push("Mention the source of used files".to_string());
     }
 }
 
@@ -132,7 +133,7 @@ impl Handler<DiscordMessage> for OpenaiActor {
             mqtt_actor
                 .send(DiscordSend {
                     channel: msg.channel,
-                    content: format!("***Without embeddings repsonse:*** {}", response_text),
+                    content: format!("***Without embeddings repsonse:***\n {}", response_text),
                 })
                 .await
                 .unwrap();
@@ -157,7 +158,17 @@ impl Handler<EmbeddingsResponse> for OpenaiActor {
         debug!("Embeddings response: {:?}", msg);
         let channel = self.channel.unwrap();
         let client = self.client.clone();
-        let embeddings: Vec<String> = msg.0.iter().map(|x| x.0.metadata.get("content").unwrap().clone()).collect();
+        let embeddings: Vec<String> = msg
+            .0
+            .iter()
+            .map(|x| format!(
+                "file: {}\n repo: {}/{}\n content: {}",
+                x.0.metadata.get("path").unwrap().clone(),
+                x.0.metadata.get("author").unwrap().clone(),
+                x.0.metadata.get("repo").unwrap().clone(),
+                x.0.metadata.get("content").unwrap().clone()
+            ))
+            .collect();
         self.insert_embeddings(channel, embeddings);
         let request = self.generate_response(channel);
         let mqtt_actor = self.mqtt_actor.clone().unwrap();
@@ -190,7 +201,7 @@ impl Handler<EmbeddingsResponse> for OpenaiActor {
             mqtt_actor
                 .send(DiscordSend {
                     channel: channel,
-                    content: format!("***Embeddings repsonse:*** {}", response_text),
+                    content: format!("\n\n***Embeddings repsonse:***\n {}", response_text),
                 })
                 .await
                 .unwrap();
