@@ -1,35 +1,39 @@
 use std::collections::HashMap;
-use std::error::Error;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai_context::AiContext;
-use async_openai::error::OpenAIError;
-use async_openai::Client as GptClient;
-
-use async_openai::types::CreateChatCompletionRequestArgs;
-use async_recursion::async_recursion;
 use log::{debug, error, info, trace};
 
-use mqtt::AsyncClient;
-use serde::{Deserialize, Serialize};
 use actix::prelude::*;
 
+use serde::{Deserialize, Serialize};
 use paho_mqtt::{self as mqtt};
-use tiktoken_rs::get_chat_completion_max_tokens;
-use tokio::join;
-use tokio::sync::mpsc::{channel as tokio_channel, Receiver, Sender};
 use tokio::sync::Mutex;
-use tokio::time::{self};
-use actors::mqtt_actor::MqttActor;
-
-use crate::actors::mqtt_actor::MqttMessage;
-use crate::actors::openai_actor::OpenaiActor;
-use crate::actors::typing_actor::TypingActor;
+use actors::mqtt::MqttActor;
+use async_openai::Client as GptClient;
+use crate::actors::mqtt::MqttMessage;
+use crate::actors::openai::OpenaiActor;
+use crate::actors::typing::TypingActor;
 
 mod actors;
 mod ai_context;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Message)]
+#[rtype(result = "Vec<(Embedding, f32)>")]
+pub struct EmbeddingsRequest {
+    pub message: String,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Message)]
+#[rtype(result = "()")]
+pub struct Embedding {
+    pub vector: Vec<f32>,
+    pub metadata: HashMap<String, String>,
+    pub id: String,
+    pub timestamp: u64,
+}
+
 
 #[derive(Serialize, Deserialize, Message)]
 #[rtype(result = "()")]
@@ -58,138 +62,6 @@ struct Attachment {
     title: String,
 }
 
-
-
-#[derive(Debug, Serialize, Deserialize)]
-struct EmbeddingsQuery {
-    embedding: Vec<f32>,
-    limit: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct EmbeddingsResponse {
-    embeddings: Vec<(String, f32)>,
-}
-
-pub struct GptContext {
-    name: String,
-    client: GptClient,
-    model: String,
-    context: HashMap<String, AiContext>,
-}
-
-impl GptContext {
-    #[async_recursion]
-    async fn get_response(
-        &mut self,
-        channel_id: &str,
-        mqtt_client: &AsyncClient,
-        embeddings_rx: &mut Receiver<String>,
-    ) -> Result<String, &str> {
-        let context = self.context.get_mut(channel_id).unwrap();
-
-        // context.retain(|m| {
-        //     match m.role {
-        //         Role::User => true,
-        //         _ => false,
-        //     }
-        // });
-        // let content = context.iter().fold(String::new(), |a, b| {
-        //     format!("{}\n{}", a, b.content)
-        // });
-        // let request = CreateEmbeddingRequestArgs::default()
-        //     .model("text-embedding-ada-002")
-        //     .input([content.clone()])
-        //     .build()
-        //     .unwrap();
-
-        // let response = self.client.embeddings().create(request).await.unwrap();
-        // let vector = response.data[0].embedding.clone();
-        // let embedding = EmbeddingsQuery {
-        //     embedding: vector,
-        //     limit: 3,
-        // };
-        // let json = serde_json::to_string(&embedding).unwrap();
-        // let mqtt_message = paho_mqtt::Message::new("epeolus/query/all", json, 1);
-        // mqtt_client
-        //     .publish(mqtt_message)
-        //     .await
-        //     .expect("Failed to publish message");
-
-        // let embeddings_message = embeddings_rx
-        //     .recv()
-        //     .await
-        //     .expect("Failed to receive message");
-        // let response: EmbeddingsResponse = serde_json::from_str(&embeddings_message).unwrap();
-        // for embedding in response.embeddings {
-        //     if embedding.1 >= 0.2 {
-        //         continue;
-        //     }
-        //     debug!("Adding embedding: {:?}", embedding);
-        // context.push(
-        //     ChatCompletionRequestMessageArgs::default()
-        //         .role(Role::User)
-        //         .content(&embedding.0)
-        //         .name("SYSTEM")
-        //         .build()
-        //         .unwrap(),
-        // );
-        // }
-
-        context.manage_tokens(&self.model);
-
-        let max_tokens = get_chat_completion_max_tokens(&self.model, &context.to_chat_history()).unwrap();
-
-        let request = CreateChatCompletionRequestArgs::default()
-            .max_tokens((max_tokens as u16) - 110)
-            .model(&self.model)
-            .messages(context.to_chat_history())
-            .build()
-            .expect("Failed to build request");
-
-        let response = self.client.chat().create(request).await;
-        match response {
-            Ok(response) => {
-                if let Some(usage) = response.usage {
-                    debug!("tokens: {}", usage.total_tokens);
-                }
-
-                if let Some(resp) = response.choices.first() {
-                    Ok(resp.message.content.clone())
-                } else {
-                    Err("No choices")
-                }
-            }
-            Err(OpenAIError::ApiError(err)) => {
-                error!("Request error: {:?}", err);
-                if let Some(code) = err.code {
-                    if code == "context_length_exceeded" {
-                        Err("Context length exceeded")
-                    } else {
-                        Err("Request error")
-                    }
-                } else {
-                    Err("Request error")
-                }
-            }
-            _ => Err("Request error"),
-        }
-    }
-
-    async fn new(name: &str, model: &str, key: &str) -> Result<Self, Box<dyn Error>> {
-        let client = GptClient::new().with_api_key(key);
-
-        let context = HashMap::new();
-        Ok(Self {
-            name: name.to_owned(),
-            client,
-            model: model.to_owned(),
-            context,
-        })
-    }
-
-}
-
 const TOPICS: &[&str] = &["carpenter/discord/receive", "epeolus/response/all"];
 const QOS: &[i32] = &[1, 1];
 
@@ -216,11 +88,8 @@ async fn main() {
         info!("Subscribed to: {:?}", TOPICS);
     }
 
-    let gpt = GptContext::new(
-        "Lovelace",
-        "gpt-3.5-turbo",
-        "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",
-    ).await.unwrap();
+    let key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
+    let client = GptClient::new().with_api_key(key);
 
     let typing_actor = TypingActor {
         mqtt_actor: None,
@@ -228,7 +97,7 @@ async fn main() {
     }.start();
 
     let openai_actor = OpenaiActor {
-        client: gpt.client.clone(),
+        client: client.clone(),
         name: "lovelace".to_owned(),
         context: HashMap::new(),
         model: "gpt-3.5-turbo".to_owned(),
@@ -248,6 +117,7 @@ async fn main() {
         loop {
             while let Ok(message_options) = stream.recv().await {
                 if let Some(message) = message_options {
+                    trace!("Received message: {:?}", message);
                     mqtt_actor.send(MqttMessage(message.clone())).await.unwrap();
                 } else {
                     error!("Lost connection. Attempting reconnect.");

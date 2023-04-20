@@ -4,7 +4,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::RegisterActor;
 
-use super::mqtt_actor::{MqttActor, SendTyping};
+use super::mqtt::{MqttActor, SendTyping};
 
 #[derive(Message, Serialize, Deserialize)]
 #[rtype(result = "()")]

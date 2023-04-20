@@ -8,9 +8,9 @@ use async_openai::{
 use log::{debug, error, info};
 use tiktoken_rs::get_chat_completion_max_tokens;
 
-use crate::{ai_context::AiContext, DiscordMessage, DiscordSend, RegisterActor, actors::typing_actor::TypingMessage};
+use crate::{ai_context::AiContext, DiscordMessage, DiscordSend, RegisterActor, actors::typing::TypingMessage};
 
-use super::{mqtt_actor::MqttActor, typing_actor::TypingActor};
+use super::{mqtt::MqttActor, typing::TypingActor};
 
 pub struct OpenaiActor {
     pub name: String,
