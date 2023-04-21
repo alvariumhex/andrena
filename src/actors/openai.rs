@@ -31,7 +31,7 @@ impl OpenaiActor {
             true => self.context.get_mut(channel_id).unwrap(),
             false => {
                 let mut context = AiContext::new();
-                context.set_static_context("You can use following emotes in the conversation if you see fit, each emote has a meaning next to it in one or multiple words, the next emote is denoted with a ; : <:kekdog:1090251469988573184> big laughter; <a:mwaa:1090251284617101362> frustration; <:oof:1090251382801571850> dissapointment or frustration; <:finnyikes:1090251493950627942> uncomfortable disgusted dissapointment; <a:catpls:1090251360693407834> silly mischievious; <:gunma:1090251357316988948> demanding angry; <:snicker:1091728748145033358> flabergasted suprised; <:crystalheart:1090323901583736832> love appreciation; <:dogwat:1090253587273236580> disbelief suprise");
+                // context.set_static_context("You can use following emotes in the conversation if you see fit, each emote has a meaning next to it in one or multiple words, the next emote is denoted with a ; : <:kekdog:1090251469988573184> big laughter; <a:mwaa:1090251284617101362> frustration; <:oof:1090251382801571850> dissapointment or frustration; <:finnyikes:1090251493950627942> uncomfortable disgusted dissapointment; <a:catpls:1090251360693407834> silly mischievious; <:gunma:1090251357316988948> demanding angry; <:snicker:1091728748145033358> flabergasted suprised; <:crystalheart:1090323901583736832> love appreciation; <:dogwat:1090253587273236580> disbelief suprise");
                 self.context.insert(channel_id.to_owned(), context);
                 self.context.get_mut(channel_id).unwrap()
             }
@@ -67,7 +67,7 @@ impl OpenaiActor {
     fn insert_embeddings(&mut self, channel: u64, embeddings: Vec<String>) {
         let context = self.get_context_for_id(&channel.to_string());
         context.embeddings = embeddings;
-        context.embeddings.push("Mention the source of used files".to_string());
+        context.embeddings.push("Above is documentation/code relevant to the question asked, Please include the source in your reply if you use this documentation.".to_string());
     }
 }
 
@@ -94,7 +94,7 @@ impl Handler<DiscordMessage> for OpenaiActor {
             return;
         }
 
-        if !msg.content.to_lowercase().contains(&name.to_lowercase()) {
+        if !msg.content.to_lowercase().contains(&name.to_lowercase()) && msg.channel != 1098877701231742978 {
             return;
         }
 
@@ -141,7 +141,7 @@ impl Handler<DiscordMessage> for OpenaiActor {
             mqtt_actor
                 .send(EmbeddingsRequest {
                     message: msg.content,
-                    limit: 5,
+                    limit: 8,
                 })
                 .await
                 .unwrap()
@@ -162,8 +162,8 @@ impl Handler<EmbeddingsResponse> for OpenaiActor {
             .0
             .iter()
             .map(|x| format!(
-                "file: {}\n repo: {}/{}\n content: {}",
-                x.0.metadata.get("path").unwrap().clone(),
+                "source: {}\n repo: {}/{}\n content: {}",
+                x.0.metadata.get("source").unwrap().clone(),
                 x.0.metadata.get("author").unwrap().clone(),
                 x.0.metadata.get("repo").unwrap().clone(),
                 x.0.metadata.get("content").unwrap().clone()
@@ -193,10 +193,10 @@ impl Handler<EmbeddingsResponse> for OpenaiActor {
                 }
             };
 
-            typing_actor.do_send(TypingMessage {
+            typing_actor.send(TypingMessage {
                 typing: false,
-                channel: channel,
-            });
+                channel,
+            }).await.unwrap();
 
             mqtt_actor
                 .send(DiscordSend {
