@@ -1,140 +1,41 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use actors::gpt::GptActor;
+use log::{error, info};
 
-use log::{debug, error, info, trace};
-
-use actix::prelude::*;
-
-use serde::{Deserialize, Serialize};
-use paho_mqtt::{self as mqtt};
-use tokio::sync::Mutex;
-use actors::mqtt::MqttActor;
-use async_openai::Client as GptClient;
-use crate::actors::mqtt::MqttMessage;
-use crate::actors::openai::OpenaiActor;
-use crate::actors::typing::TypingActor;
+use ractor::Actor;
 
 mod actors;
 mod ai_context;
 
-// Vec<(Embedding, f32)>
-#[derive(Debug, Clone, Serialize, Deserialize, Message)]
-#[rtype(result = "")]
-pub struct EmbeddingsRequest {
-    pub message: String,
-    pub limit: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Message)]
-#[rtype(result = "()")]
-pub struct EmbeddingsResponse(pub Vec<(Embedding, f32)>);
-
-#[derive(Debug, Clone, Serialize, Deserialize, Message)]
-#[rtype(result = "()")]
-pub struct Embedding {
-    pub vector: Vec<f32>,
-    pub metadata: HashMap<String, String>,
-    pub id: String,
-    pub timestamp: u64,
-}
-
-#[derive(Serialize, Deserialize, Message)]
-#[rtype(result = "()")]
-struct DiscordMessage {
-    author: String,
-    content: String,
-    attachments: Vec<Attachment>,
-    channel: u64,
-}
-
-#[derive(Serialize, Deserialize, Message)]
-#[rtype(result = "()")]
-struct DiscordSend {
-    content: String,
-    channel: u64,
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-struct RegisterActor(pub Addr<MqttActor>);
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct Attachment {
-    url: String,
-    content_type: String,
-    title: String,
-}
-
-const TOPICS: &[&str] = &["carpenter/discord/receive", "epeolus/response/all"];
-const QOS: &[i32] = &[1, 1];
-
-#[actix_rt::main]
+#[tokio::main]
 async fn main() {
     pretty_env_logger::formatted_builder()
         .filter(Some("andrena"), log::LevelFilter::Trace)
         .init();
 
-    let create_opts = mqtt::CreateOptionsBuilder::new()
-        .server_uri("mqtt://localhost:1883")
-        .finalize();
+    let server = ractor_cluster::NodeServer::new(
+        8022,
+        "cookie".to_owned(),
+        "andrena".to_owned(),
+        "localhost".to_owned(),
+        None,
+        None,
+    );
 
-    let mut async_client = mqtt::AsyncClient::new(create_opts).unwrap();
-    let stream = async_client.get_stream(25);
-    let mqtt_client = Arc::new(Mutex::new(async_client));
+    let (actor, _) = Actor::spawn(None, server, ())
+        .await
+        .expect("Failed to spawn actor");
 
-    {
-        let client = mqtt_client.lock().await;
-
-        client.connect(None).await.unwrap();
-        info!("MQTT connected");
-        client.subscribe_many(TOPICS, QOS).await.unwrap();
-        info!("Subscribed to: {:?}", TOPICS);
+    if let Err(error) = ractor_cluster::node::client::connect(&actor, "127.0.0.1:8021").await {
+        error!("Failed to connect to cluster: {}", error);
+    } else {
+        info!("Connected to cluster");
     }
 
-    let key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
-    let client = GptClient::new().with_api_key(key);
+    let (_, _) = Actor::spawn(None, GptActor, ())
+        .await
+        .expect("Failed to spawn gpt actor");
 
-    let typing_actor = TypingActor {
-        mqtt_actor: None,
-        channels: vec![],
-    }.start();
-
-    let openai_actor = OpenaiActor {
-        client: client.clone(),
-        name: "lovelace".to_owned(),
-        context: HashMap::new(),
-        model: "gpt-3.5-turbo".to_owned(),
-        mqtt_actor: None,
-        typing_actor: typing_actor.clone(),
-        channel: None
-    }.start();
-
-    let mqtt_actor = MqttActor {
-        client: mqtt_client.clone(),
-        openai_actor: openai_actor.clone(),
-    }.start();
-
-    openai_actor.send(RegisterActor(mqtt_actor.clone())).await.unwrap();
-    typing_actor.send(RegisterActor(mqtt_actor.clone())).await.unwrap();
-
-   tokio::spawn(async move {
-        loop {
-            while let Ok(message_options) = stream.recv().await {
-                if let Some(message) = message_options {
-                    trace!("Received message: {:?}", message);
-                    mqtt_actor.send(MqttMessage(message.clone())).await.unwrap();
-                } else {
-                    error!("Lost connection. Attempting reconnect.");
-                    let client = mqtt_client.lock().await;
-                    while let Err(err) = client.reconnect().await {
-                        println!("Error reconnecting: {}", err);
-                        tokio::time::sleep(Duration::from_millis(1000)).await;
-                    }
-                    info!("Reconnected");
-                    client.subscribe_many(TOPICS, QOS).await.unwrap();
-                }
-            }
-        }
-    }).await.unwrap();
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to listen for ctrl-c");
 }

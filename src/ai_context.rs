@@ -2,15 +2,15 @@ use async_openai::types::{ChatCompletionRequestMessage, ChatCompletionRequestMes
 use log::info;
 use tiktoken_rs::{get_bpe_from_model, get_chat_completion_max_tokens};
 
-pub struct AiContext {
+pub struct GptContext {
     pub static_context: Vec<String>,
     pub embeddings: Vec<String>,
     pub history: Vec<(String, String)>,
 }
 
-impl AiContext {
-    pub fn new() -> AiContext {
-        AiContext {
+impl GptContext {
+    pub fn new() -> GptContext {
+        GptContext {
             static_context: Vec::new(),
             history: Vec::new(),
             embeddings: Vec::new(),
@@ -23,11 +23,17 @@ impl AiContext {
         ];
     }
 
+    pub fn fetch_semantic_query(&self) -> String {
+        let mut history = self.history.clone();
+        history.retain(|h| h.0 != "Lovelace");
+        history.iter().map(|h| h.1.clone()).collect::<Vec<String>>().join("\n")
+    }
+
     pub fn push_history(&mut self, entry: (String, String)) {
         self.history.push(entry);
     }
 
-    pub fn to_chat_history(&self) -> Vec<ChatCompletionRequestMessage> {
+    pub fn to_openai_chat_history(&self) -> Vec<ChatCompletionRequestMessage> {
         let mut chat: Vec<ChatCompletionRequestMessage> = Vec::new();
         for h in &self.static_context {
             chat.push(
@@ -66,12 +72,15 @@ impl AiContext {
     }
 
     pub fn manage_tokens(&mut self, model: &str) {
-        let mut token_count = get_chat_completion_max_tokens(model, &self.to_chat_history())
+        let mut token_count = get_chat_completion_max_tokens(model, &self.to_openai_chat_history())
             .expect("Failed to get max tokens");
         while token_count < 750 {
             info!("Reached max token count, removing oldest message from context");
+            if self.history.is_empty() {
+                panic!("History is empty but token count was reached");
+            }
             self.history.remove(0);
-            token_count = get_chat_completion_max_tokens(model, &self.to_chat_history())
+            token_count = get_chat_completion_max_tokens(model, &self.to_openai_chat_history())
                 .expect("Failed to get max tokens");
         }
     }
