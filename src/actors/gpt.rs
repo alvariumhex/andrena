@@ -4,7 +4,7 @@ use async_openai::{
 };
 use async_trait::async_trait;
 use log::{debug, error, info, trace};
-use ractor::{Actor, ActorProcessingErr, ActorRef, BytesConvertable, rpc::cast, ActorCell};
+use ractor::{Actor, ActorProcessingErr, ActorRef, BytesConvertable, rpc::cast};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tiktoken_rs::get_chat_completion_max_tokens;
@@ -33,6 +33,7 @@ pub struct ChatMessage {
     pub content: String,
     pub channel: u64,
     pub author: String,
+    pub metadata: HashMap<String, String>
 }
 impl ractor::Message for ChatMessage {}
 
@@ -186,7 +187,7 @@ impl Actor for GptActor {
                     .content
                     .to_lowercase()
                     .contains(&name.to_lowercase())
-                    && chat_message.channel != 1098877701231742978
+                    && chat_message.metadata.get("provider") == Some(&"discord".to_owned())
                 {
                     return Ok(());
                 }
@@ -229,6 +230,7 @@ impl Actor for GptActor {
                         channel: chat_message.channel,
                         content: response_text.clone(),
                         author: state.name.clone(),
+                        metadata: HashMap::new(),
                     })).unwrap();
                     
                 }
