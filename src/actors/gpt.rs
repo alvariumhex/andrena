@@ -50,6 +50,13 @@ pub struct ChatMessage {
 impl ractor::Message for ChatMessage {}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Embedding {
+    pub content: String,
+    pub vector: Vec<f32>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum GptMessage {
     Register(ChatMessage),
     ClearContext(u64),
@@ -114,27 +121,32 @@ impl GptState {
         self.context.remove(channel_id);
     }
 
-    async fn fetch_embeddings(&self, query: String, limit: u8) -> Vec<(String, f32)> {
+    async fn fetch_embeddings(&self, query: String, limit: u8) -> Vec<(Embedding, f32)> {
         let actors = ractor::pg::get_members(&String::from("embed_store"));
         let store = actors.first().unwrap();
         let store = ActorRef::<RemoteStoreRequestMessage>::from(store.clone());
         let res = call!(store, RemoteStoreRequestMessage::Retrieve, query, limit).unwrap();
-        let embeddings: Vec<(String, f32)> = serde_json::from_str(&res).unwrap();
+        let embeddings: Vec<(Embedding, f32)> = serde_json::from_str(&res).unwrap();
         embeddings
     }
 
     fn generate_response(&mut self, channel: u64) -> CreateChatCompletionRequest {
         debug!("Generating response for channel: {}", channel);
         let model = self.model.clone();
-
         let context = self.get_context_for_id(&channel);
+
+        let include_static_context = context.embeddings.len() > 0;
+
         context.manage_tokens(&model);
-        let max_tokens =
-            get_chat_completion_max_tokens(&model, &context.to_openai_chat_history()).unwrap();
+        let max_tokens = get_chat_completion_max_tokens(
+            &model,
+            &context.to_openai_chat_history(include_static_context),
+        )
+        .unwrap();
         CreateChatCompletionRequestArgs::default()
             .max_tokens((max_tokens as u16) - 110)
             .model(model)
-            .messages(context.to_openai_chat_history())
+            .messages(context.to_openai_chat_history(include_static_context))
             .build()
             .expect("Failed to build request")
     }
@@ -145,9 +157,12 @@ impl GptState {
     }
 
     fn insert_embeddings(&mut self, channel: u64, embeddings: Vec<String>) {
+        if embeddings.is_empty() {
+            return;
+        }
         let context = self.get_context_for_id(&channel);
         context.embeddings = embeddings;
-        context.embeddings.push("Given above documentation, answer the question. If you cannot find the answer in the documentation, mention it.".to_string());
+        context.embeddings.push("Given above documentation, answer the question. If you cannot find the answer in the documentation, mention it. Inlucde the url of the document in your response".to_string());
     }
 
     fn get_semantic_query(&mut self, channel: u64) -> String {
@@ -289,7 +304,7 @@ impl Actor for GptActor {
             context,
             embeddings,
             model,
-            name: "Lovelace".to_string(),
+            name: "computer".to_string(),
         })
     }
 
@@ -326,10 +341,18 @@ impl Actor for GptActor {
                 }
 
                 let embeddings = state
-                    .fetch_embeddings(chat_message.content.clone(), 5)
+                    .fetch_embeddings(chat_message.content.clone(), 4)
                     .await;
-                debug!("Embeddings: {:?}", embeddings);
-                let embeddings: Vec<String> = embeddings.iter().map(|(s, _)| s.clone()).collect();
+                debug!(
+                    "Embeddings distances: {:?}",
+                    embeddings.iter().map(|e| e.1).collect::<Vec<f32>>()
+                );
+                let embeddings: Vec<String> = embeddings
+                    .iter()
+                    .filter(|e| e.1 < 0.25)
+                    .map(|(s, _)| s.clone().content)
+                    .collect();
+                debug!("Embeddings {}: {:?}", embeddings.len(), embeddings);
 
                 state.clear_embeddings(chat_message.channel);
                 state.insert_embeddings(chat_message.channel, embeddings);

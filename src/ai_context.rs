@@ -35,17 +35,22 @@ impl GptContext {
         self.history.push(entry);
     }
 
-    pub fn to_openai_chat_history(&self) -> Vec<ChatCompletionRequestMessage> {
+    pub fn to_openai_chat_history(
+        &self,
+        include_static_context: bool,
+    ) -> Vec<ChatCompletionRequestMessage> {
         let mut chat: Vec<ChatCompletionRequestMessage> = Vec::new();
-        for h in &self.static_context {
-            chat.push(
-                ChatCompletionRequestMessageArgs::default()
-                    .role(Role::System)
-                    .name("system")
-                    .content(h)
-                    .build()
-                    .unwrap(),
-            );
+        if (include_static_context) {
+            for h in &self.static_context {
+                chat.push(
+                    ChatCompletionRequestMessageArgs::default()
+                        .role(Role::System)
+                        .name("system")
+                        .content(h)
+                        .build()
+                        .unwrap(),
+                );
+            }
         }
 
         for h in &self.history {
@@ -88,15 +93,16 @@ impl GptContext {
     }
 
     pub fn manage_tokens(&mut self, model: &str) {
-        let mut token_count = get_chat_completion_max_tokens(model, &self.to_openai_chat_history())
-            .expect("Failed to get max tokens");
+        let mut token_count =
+            get_chat_completion_max_tokens(model, &self.to_openai_chat_history(true))
+                .expect("Failed to get max tokens");
         while token_count < 750 {
             info!("Reached max token count, removing oldest message from context");
             if self.history.is_empty() {
                 panic!("History is empty but token count was reached");
             }
             self.history.remove(0);
-            token_count = get_chat_completion_max_tokens(model, &self.to_openai_chat_history())
+            token_count = get_chat_completion_max_tokens(model, &self.to_openai_chat_history(true))
                 .expect("Failed to get max tokens");
         }
     }
