@@ -1,5 +1,5 @@
 use actors::gpt::GptActor;
-use log::{error, info};
+use log::{error, info, warn};
 
 use ractor::Actor;
 
@@ -27,6 +27,13 @@ async fn main() {
 
     if let Err(error) = ractor_cluster::node::client::connect(&actor, "127.0.0.1:8021").await {
         error!("Failed to connect to cluster: {}", error);
+    } else {
+        info!("Connected to cluster");
+    }
+
+    // cluster interlinking does not work yet so we manually also connect to epeolus
+    if let Err(error) = ractor_cluster::node::client::connect(&actor, "127.0.0.1:8023").await {
+        warn!("Failed to connect to cluster(epeolus): {}", error);
     } else {
         info!("Connected to cluster");
     }
