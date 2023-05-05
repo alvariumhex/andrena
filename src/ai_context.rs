@@ -18,15 +18,17 @@ impl GptContext {
     }
 
     pub fn set_static_context(&mut self, context: &str) {
-        self.static_context = vec![
-            context.to_owned()
-        ];
+        self.static_context = vec![context.to_owned()];
     }
 
     pub fn fetch_semantic_query(&self) -> String {
         let mut history = self.history.clone();
         history.retain(|h| h.0 != "Lovelace");
-        history.iter().map(|h| h.1.clone()).collect::<Vec<String>>().join("\n")
+        history
+            .iter()
+            .map(|h| h.1.clone())
+            .collect::<Vec<String>>()
+            .join("\n")
     }
 
     pub fn push_history(&mut self, entry: (String, String)) {
@@ -38,19 +40,8 @@ impl GptContext {
         for h in &self.static_context {
             chat.push(
                 ChatCompletionRequestMessageArgs::default()
-                    .role(Role::User)
-                    .name("SYSTEM")
-                    .content(h)
-                    .build()
-                    .unwrap(),
-            );
-        }
-
-        for h in &self.embeddings {
-            chat.push(
-                ChatCompletionRequestMessageArgs::default()
-                    .role(Role::User)
-                    .name("SYSTEM")
+                    .role(Role::System)
+                    .name("system")
                     .content(h)
                     .build()
                     .unwrap(),
@@ -66,6 +57,31 @@ impl GptContext {
                     .build()
                     .unwrap(),
             );
+        }
+
+        chat.pop();
+
+        for h in &self.embeddings {
+            chat.push(
+                ChatCompletionRequestMessageArgs::default()
+                    .role(Role::User)
+                    .name("documentation")
+                    .content(h)
+                    .build()
+                    .unwrap(),
+            );
+        }
+
+        if self.history.len() > 0 {
+            let last_history = self.history.last().unwrap();
+            chat.push(
+                ChatCompletionRequestMessageArgs::default()
+                    .role(Role::User)
+                    .name(last_history.0.clone())
+                    .content(last_history.1.clone())
+                    .build()
+                    .unwrap(),
+            )
         }
 
         chat
