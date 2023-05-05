@@ -17,7 +17,6 @@ tiktoken-rs = "0.3.3"
 tokio = { version = "1.26.0", features = ["full"] }
 serde_json = "1.0.95"
 pretty_env_logger = "0.4.0"
-paho-mqtt = "0.12.1"
 anyhow = "1.0.70"
 ractor =  { git = "https://github.com/slawlor/ractor.git", branch = "main", features = ["cluster"]}
 ractor_cluster = { git = "https://github.com/slawlor/ractor.git", branch = "main"}
