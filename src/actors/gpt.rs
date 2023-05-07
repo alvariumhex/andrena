@@ -347,11 +347,15 @@ impl Actor for GptActor {
                     "Embeddings distances: {:?}",
                     embeddings.iter().map(|e| e.1).collect::<Vec<f32>>()
                 );
-                let embeddings: Vec<String> = embeddings
+                let mut embeddings: Vec<String> = embeddings
                     .iter()
                     .filter(|e| e.1 < 0.25)
                     .map(|(s, _)| s.clone().content)
                     .collect();
+
+                // reverse so that the most similar item is latest in the context, this improves the quality of the response
+                embeddings.reverse();
+
                 debug!("Embeddings {}: {:?}", embeddings.len(), embeddings);
 
                 state.clear_embeddings(chat_message.channel);
