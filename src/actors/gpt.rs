@@ -6,7 +6,7 @@ use async_openai::{
     Client,
 };
 use async_trait::async_trait;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use ractor::{
     call, rpc::cast, Actor, ActorProcessingErr, ActorRef, BytesConvertable, RpcReplyPort,
 };
@@ -123,8 +123,13 @@ impl GptState {
 
     async fn fetch_embeddings(&self, query: String, limit: u8) -> Vec<(Embedding, f32)> {
         let actors = ractor::pg::get_members(&String::from("embed_store"));
-        let store = actors.first().unwrap();
-        let store = ActorRef::<RemoteStoreRequestMessage>::from(store.clone());
+        let store = actors.first();
+        if store.is_none() {
+            warn!("No store found");
+            return vec![];
+        }
+
+        let store = ActorRef::<RemoteStoreRequestMessage>::from(store.unwrap().clone());
         let res = call!(store, RemoteStoreRequestMessage::Retrieve, query, limit).unwrap();
         let embeddings: Vec<(Embedding, f32)> = serde_json::from_str(&res).unwrap();
         embeddings
