@@ -1,7 +1,8 @@
-use actors::gpt::GptActor;
-use log::{error, info, warn};
-
+use actors::{channel_sup::{ChannelSupervisorMessage, ChannelSupervisor}, communication::discord::DiscordActor};
+use log::{error, info, warn, debug};
+use serenity::futures::StreamExt;
 use ractor::Actor;
+use tokio::net::TcpListener;
 
 mod actors;
 mod ai_context;
@@ -11,6 +12,15 @@ async fn main() {
     pretty_env_logger::formatted_builder()
         .filter(Some("andrena"), log::LevelFilter::Trace)
         .init();
+
+        let (_, _) = Actor::spawn(None, DiscordActor, "Lovelace".to_owned())
+        .await
+        .expect("Failed to spawn actor");
+
+    let (_, _) = Actor::spawn(Some("typing".to_owned()), actors::communication::typing::TypingActor, ())
+        .await
+        .expect("Failed to spawn actor");
+
 
     let server = ractor_cluster::NodeServer::new(
         8022,
@@ -25,12 +35,6 @@ async fn main() {
         .await
         .expect("Failed to spawn actor");
 
-    if let Err(error) = ractor_cluster::node::client::connect(&actor, "127.0.0.1:8021").await {
-        error!("Failed to connect to cluster: {}", error);
-    } else {
-        info!("Connected to cluster");
-    }
-
     // cluster interlinking does not work yet so we manually also connect to epeolus
     if let Err(error) = ractor_cluster::node::client::connect(&actor, "127.0.0.1:8023").await {
         warn!("Failed to connect to cluster(epeolus): {}", error);
@@ -38,9 +42,35 @@ async fn main() {
         info!("Connected to cluster");
     }
 
-    let (_, _) = Actor::spawn(None, GptActor, ())
+    let (_, channel_sup) = Actor::spawn(Some(String::from("channel_sup")), ChannelSupervisor, ())
         .await
-        .expect("Failed to spawn gpt actor");
+        .expect("Failed to spawn channel supervisor actor");
+
+
+    // web socket listening thread
+    tokio::spawn(async move {
+        info!("Initializing websocket server");
+        let addr = "0.0.0.0:3001";
+        let server = TcpListener::bind(addr).await.unwrap();
+        info!("Websocket server listening on {}", addr);
+        loop {
+            match server.accept().await {
+                Ok((stream, _)) => {
+                    debug!("Accepted connection from {:?}", stream.peer_addr());
+                    
+                    let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    let (write, read) = socket.split();
+                    Actor::spawn(None, actors::communication::websocket::WebSocketActor, (write, read))
+                        .await
+                        .expect("Failed to spawn websocket actor");
+                }
+                Err(e) => {
+                    error!("Failed to accept connection: {}", e);
+                }
+            }
+        }
+    });
+
 
     tokio::signal::ctrl_c()
         .await

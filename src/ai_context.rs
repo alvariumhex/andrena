@@ -40,7 +40,7 @@ impl GptContext {
         include_static_context: bool,
     ) -> Vec<ChatCompletionRequestMessage> {
         let mut chat: Vec<ChatCompletionRequestMessage> = Vec::new();
-        if (include_static_context) {
+        if include_static_context {
             for h in &self.static_context {
                 chat.push(
                     ChatCompletionRequestMessageArgs::default()

@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+serenity = { version = "0.11.5", default-features = false, features = ["client", "gateway", "rustls_backend", "model", "voice"] }
 async-openai = "0.10.1"
 async-recursion = "1.0.4"
 log = "0.4.17"
@@ -13,6 +14,7 @@ regex = "1.7.3"
 reqwest = { version = "0.11.16", features = ["json"] }
 rustube = "0.6.0"
 serde = { version = "1.0.159", features = ["serde_derive"] }
+futures = "0.3.28"
 tiktoken-rs = "0.3.3"
 tokio = { version = "1.26.0", features = ["full"] }
 serde_json = "1.0.95"
@@ -20,5 +22,9 @@ pretty_env_logger = "0.4.0"
 anyhow = "1.0.70"
 ractor =  { git = "https://github.com/slawlor/ractor.git", branch = "main", features = ["cluster"]}
 ractor_cluster = { git = "https://github.com/slawlor/ractor.git", branch = "main"}
+tokio-tungstenite = { version = "0.18.0", features = ["native-tls"] }
 async-trait = "0.1.68"
 bincode = "1.3.3"
+rand = "0.8.5"
+futures-util = "0.3.28"
+hound = "3.5.0"
