@@ -49,12 +49,12 @@ impl From<ChatMessage> for ChannelMessage {
 }
 
 pub struct ChannelState {
-    id: u64,
-    wakeword: Option<String>,
-    model: String,
+    pub id: u64,
+    pub wakeword: Option<String>,
+    pub model: String,
     client: Client,
     context: GptContext,
-    tools: Vec<String>,
+    pub tools: Vec<String>,
 }
 
 pub struct ChannelActor;
@@ -297,7 +297,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_start() {
+    async fn start() {
         env::set_var("OPENAI_API_KEY", "dummy_key");
         assert!(Actor::spawn(None, ChannelActor, None).await.is_ok());
     }

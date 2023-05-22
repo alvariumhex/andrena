@@ -114,7 +114,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "uses paying service"]
-    async fn test_transcribe_tool() {
+    async fn transcribe_youtube_video() {
         let (actor_ref, _) = Actor::spawn(None, TranscribeTool, ()).await.unwrap();
         let rep = call!(
             &actor_ref,
@@ -126,7 +126,7 @@ mod tests {
         assert!(rep.clone().unwrap().starts_with("I can't tell"));
 
         // save to file
-        // let mut file = File::create("test.txt").await.unwrap();
-        // file.write_all(rep.unwrap().as_bytes()).await.unwrap();
+        let mut file = File::create("test_transctibe.txt").await.unwrap();
+        file.write_all(rep.unwrap().as_bytes()).await.unwrap();
     }
 }

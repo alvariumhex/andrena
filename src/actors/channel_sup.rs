@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
-use log::warn;
+use log::{info, warn};
 use ractor::{
-    Actor, ActorCell, ActorProcessingErr, ActorRef, Message, RpcReplyPort, SupervisionEvent, BytesConvertable,
+    Actor, ActorCell, ActorProcessingErr, ActorRef, BytesConvertable, Message, RpcReplyPort,
+    SupervisionEvent,
 };
 use ractor_cluster::RactorClusterMessage;
 
-use super::{channel::{ChannelActor, ChannelMessage}};
+use super::channel::{ChannelActor, ChannelMessage, ChannelState};
 
 pub struct ChannelSupervisorState {
     pub channels: HashMap<u64, ActorRef<ChannelMessage>>,
@@ -46,7 +47,7 @@ impl Actor for ChannelSupervisor {
 
     async fn handle(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
@@ -55,28 +56,35 @@ impl Actor for ChannelSupervisor {
                 if let Some(channel) = state.channels.get(&id) {
                     reply_port.send(channel.clone()).unwrap();
                 } else {
-                    let (channel, _) =
-                        Actor::spawn(Some(format!("channel-{}", id)), ChannelActor, Some(id))
-                            .await?;
+                    info!("Fetching channel that does not exist, creating {}", id);
+                    let (channel, _) = Actor::spawn_linked(
+                        Some(format!("channel-{}", id)),
+                        ChannelActor,
+                        Some(id),
+                        myself.get_cell(),
+                    )
+                    .await?;
                     state.channels.insert(id, channel.clone());
                     reply_port.send(channel).unwrap();
                 }
             }
             ChannelSupervisorMessage::ChannelExists(id, reply_port) => {
                 reply_port.send(state.channels.contains_key(&id)).unwrap();
-            },
+            }
             ChannelSupervisorMessage::CreateChannel(id, reply_port) => {
-                let id = id.unwrap_or_else(|| {
-                    rand::random::<u64>()
-                });
+                let id = id.unwrap_or_else(|| rand::random::<u64>());
 
                 if let Some(channel) = state.channels.get(&id) {
                     warn!("Channel {} already exists", id);
                     reply_port.send(channel.clone()).unwrap();
                 } else {
-                    let (channel, _) =
-                        Actor::spawn(Some(format!("channel-{}", id)), ChannelActor, Some(id))
-                            .await?;
+                    let (channel, _) = Actor::spawn_linked(
+                        Some(format!("channel-{}", id)),
+                        ChannelActor,
+                        Some(id),
+                        myself.get_cell(),
+                    )
+                    .await?;
                     state.channels.insert(id, channel.clone());
                     reply_port.send(channel).unwrap();
                 }
@@ -89,13 +97,83 @@ impl Actor for ChannelSupervisor {
         &self,
         _myself: ActorRef<Self::Msg>,
         message: SupervisionEvent,
-        _state: &mut Self::State,
+        state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            SupervisionEvent::ActorTerminated(cell, child_state, id) => {}
+            SupervisionEvent::ActorTerminated(_cell, child_state, _reason) => {
+                let child_state: ChannelState = child_state.unwrap().take().unwrap();
+                state.channels.remove(&child_state.id);
+            }
+            SupervisionEvent::ActorPanicked(cell, _error) => {
+                // untested behaviour
+                // how would I get the state (id) of a dead actor?
+                let id = cell
+                    .get_name()
+                    .unwrap()
+                    .strip_prefix("channel-")
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap();
+                state.channels.remove(&id);
+            }
             _ => {}
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::env;
+
+    use super::*;
+    use ractor::{call, Actor};
+
+    #[ctor::ctor]
+    fn init() {
+        pretty_env_logger::formatted_builder()
+            .filter(Some("andrena"), log::LevelFilter::Trace)
+            .init();
+    }
+
+    #[tokio::test]
+    async fn create_on_fetch() {
+        env::set_var("OPENAI_API_KEY", "dummy_key");
+        let (supervisor, _) = Actor::spawn(None, ChannelSupervisor, ()).await.unwrap();
+        let channel = call!(supervisor, ChannelSupervisorMessage::FetchChannel, 12345);
+        match channel {
+            Ok(_) => assert!(true),
+            Err(e) => panic!("Failed to fetch channel: {}", e),
+        }
+
+        supervisor.kill();
+    }
+
+    #[tokio::test]
+    async fn stop_removes_channel() {
+        env::set_var("OPENAI_API_KEY", "dummy_key");
+        let (supervisor, _) = Actor::spawn(None, ChannelSupervisor, ()).await.unwrap();
+        let channel = call!(supervisor, ChannelSupervisorMessage::FetchChannel, 1234).unwrap();
+
+        // channel should exist
+        let exists = call!(supervisor, ChannelSupervisorMessage::ChannelExists, 1234);
+        match exists {
+            Ok(exists) => assert!(exists),
+            Err(e) => panic!("Failed to fetch channel: {}", e),
+        }
+
+        channel.stop(None); // stop channel
+
+        // channel should be removed
+        let exists = call!(supervisor, ChannelSupervisorMessage::ChannelExists, 1234);
+        match exists {
+            Ok(exists) => assert!(!exists),
+            Err(e) => {
+                panic!("Failed to fetch channel: {}", e);
+            }
+        }
+
+        supervisor.kill();
     }
 }
