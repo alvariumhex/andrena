@@ -16,6 +16,7 @@ use crate::actors::gpt::ChatMessage;
 use super::discord::ChatActorMessage;
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(crate = "rocket::serde")]
 pub struct WebSocketMessage {
     op: u8,
     d: String,

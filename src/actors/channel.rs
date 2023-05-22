@@ -5,7 +5,9 @@ use async_openai::{
     Client,
 };
 use log::{debug, error, info, warn};
-use ractor::{call, rpc::cast, Actor, ActorProcessingErr, ActorRef, BytesConvertable};
+use ractor::{
+    call, rpc::cast, Actor, ActorProcessingErr, ActorRef, BytesConvertable, Message, RpcReplyPort,
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tiktoken_rs::get_chat_completion_max_tokens;
@@ -20,23 +22,16 @@ use crate::{
 
 use super::gpt::{ChatMessage, Embedding, RemoteStoreRequestMessage};
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Debug)]
 pub enum ChannelMessage {
     Register(ChatMessage),
+    GetHistory(RpcReplyPort<Vec<(String, String)>>),
     ClearContext,
     SetWakeword(String),
     SetModel(String),
 }
 
-impl BytesConvertable for ChannelMessage {
-    fn into_bytes(self) -> Vec<u8> {
-        bincode::serialize(&self).unwrap()
-    }
-
-    fn from_bytes(bytes: Vec<u8>) -> Self {
-        bincode::deserialize(&bytes).unwrap()
-    }
-}
+impl Message for ChannelMessage {}
 
 impl From<ChatMessage> for ChannelMessage {
     fn from(msg: ChatMessage) -> Self {
@@ -279,6 +274,9 @@ impl Actor for ChannelActor {
             }
             ChannelMessage::SetModel(model) => {
                 state.model = model;
+            }
+            ChannelMessage::GetHistory(port) => {
+                port.send(state.context.history.clone()).unwrap();
             }
         }
 

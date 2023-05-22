@@ -1,19 +1,41 @@
 #![allow(dead_code)]
 #![deny(unsafe_code)]
 
-use actors::{channel_sup::ChannelSupervisor, communication::discord::DiscordActor};
+use actors::{
+    channel::ChannelMessage,
+    channel_sup::{ChannelSupervisor, ChannelSupervisorMessage},
+    communication::{discord::DiscordActor, websocket::WebSocketMessage},
+};
 use log::{debug, error, info, warn};
-use ractor::Actor;
+use ractor::{call, Actor, ActorRef};
+use rocket::serde::json::Json;
 use serenity::futures::StreamExt;
 use tokio::net::TcpListener;
 
 mod actors;
 mod ai_context;
 
+#[macro_use]
+extern crate rocket;
+
+#[get("/channel/<id>")]
+async fn channel(id: u64) -> Json<Vec<(String, String)>> {
+    let channel_registry: ActorRef<ChannelSupervisorMessage> =
+        ractor::registry::where_is("channel_sup".to_owned())
+            .unwrap()
+            .into();
+
+    let channel = call!(channel_registry, ChannelSupervisorMessage::FetchChannel, id).unwrap();
+    let history = call!(channel, ChannelMessage::GetHistory).unwrap();
+
+    Json(history)
+}
+
 #[tokio::main]
 async fn main() {
     pretty_env_logger::formatted_builder()
         .filter(Some("andrena"), log::LevelFilter::Trace)
+        .filter(Some("rocket"), log::LevelFilter::Trace)
         .init();
 
     let (_, _) = Actor::spawn(None, DiscordActor, "Lovelace".to_owned())
@@ -78,6 +100,15 @@ async fn main() {
                 }
             }
         }
+    });
+
+    tokio::spawn(async move {
+        info!("Launching rocket server");
+        let _rocket = rocket::build()
+            .mount("/", routes![channel])
+            .launch()
+            .await
+            .unwrap();
     });
 
     tokio::signal::ctrl_c()
