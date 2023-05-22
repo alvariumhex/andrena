@@ -251,17 +251,20 @@ impl Actor for ChannelActor {
                 info!("Sending response: {}", response_text);
 
                 cast(&actor, TypingMessage::Stop(chat_message.channel)).unwrap();
-                let subscribers = ractor::pg::get_members(&"messages_send".to_owned());
+                let response_message = ChatMessage {
+                    channel: chat_message.channel,
+                    content: response_text.clone(),
+                    author: name.clone(),
+                    metadata: HashMap::new(),
+                };
 
+                state.insert_message(response_message.clone());
+
+                let subscribers = ractor::pg::get_members(&"messages_send".to_owned());
                 for subscriber in subscribers {
                     cast(
                         &subscriber,
-                        ChatActorMessage::Send(ChatMessage {
-                            channel: chat_message.channel,
-                            content: response_text.clone(),
-                            author: name.clone(),
-                            metadata: HashMap::new(),
-                        }),
+                        ChatActorMessage::Send(response_message.clone()),
                     )
                     .unwrap();
                 }
