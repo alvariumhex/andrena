@@ -298,6 +298,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_start() {
+        env::set_var("OPENAI_API_KEY", "dummy_key");
         assert!(Actor::spawn(None, ChannelActor, None).await.is_ok());
     }
 }
