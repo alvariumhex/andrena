@@ -5,13 +5,13 @@ use futures_util::{
     SinkExt, StreamExt,
 };
 use log::{error, info, trace};
-use ractor::{Actor, ActorProcessingErr, ActorRef};
+use ractor::{call, Actor, ActorProcessingErr, ActorRef};
 use serde::{Deserialize, Serialize};
 use serenity::async_trait;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 
-use crate::actors::gpt::ChatMessage;
+use crate::actors::{channel_sup::ChannelSupervisorMessage, gpt::ChatMessage};
 
 use super::discord::ChatActorMessage;
 
@@ -127,6 +127,26 @@ impl Actor for WebSocketActor {
                     trace!("Registring new channel: {}", msg.channel);
                     state.channels.push(msg.channel);
                 }
+
+                let channel_registry = ractor::registry::where_is("channel_sup".to_owned());
+                if channel_registry.is_none() {
+                    error!("Channel supervisor not found");
+                    return Ok(());
+                }
+
+                let channel_supervisor: ActorRef<ChannelSupervisorMessage> =
+                    channel_registry.unwrap().into();
+                let channel = call!(
+                    channel_supervisor,
+                    ChannelSupervisorMessage::FetchChannel,
+                    msg.channel
+                )
+                .unwrap();
+
+                channel
+                    .send_message(crate::actors::channel::ChannelMessage::Register(msg))
+                    .unwrap();
+
                 Ok(())
             }
         }
