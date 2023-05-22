@@ -13,7 +13,7 @@ pub struct ChannelSupervisorState {
 pub enum ChannelSupervisorMessage {
     FetchChannel(u64, RpcReplyPort<ActorRef<ChannelMessage>>),
     ChannelExists(u64, RpcReplyPort<bool>),
-    CreateChannel(Option<u64>, RpcReplyPort<ActorRef<ChannelMessage>>),
+    CreateChannel(Option<u64>, RpcReplyPort<(u64, ActorRef<ChannelMessage>)>),
 }
 
 impl Message for ChannelSupervisorMessage {}
@@ -68,7 +68,7 @@ impl Actor for ChannelSupervisor {
 
                 if let Some(channel) = state.channels.get(&id) {
                     warn!("Channel {} already exists", id);
-                    reply_port.send(channel.clone()).unwrap();
+                    reply_port.send((id, channel.clone())).unwrap();
                 } else {
                     let (channel, _) = Actor::spawn_linked(
                         Some(format!("channel-{}", id)),
@@ -78,7 +78,7 @@ impl Actor for ChannelSupervisor {
                     )
                     .await?;
                     state.channels.insert(id, channel.clone());
-                    reply_port.send(channel).unwrap();
+                    reply_port.send((id, channel)).unwrap();
                 }
             }
         }
@@ -167,5 +167,23 @@ mod test {
         }
 
         supervisor.kill();
+    }
+
+    #[tokio::test]
+    async fn create_channel() {
+        env::set_var("OPENAI_API_KEY", "dummy_key");
+        let (supervisor, _) = Actor::spawn(None, ChannelSupervisor, ()).await.unwrap();
+        let (id, channel_1) =
+            call!(supervisor, ChannelSupervisorMessage::CreateChannel, None).unwrap();
+
+        // recreating a channel with the same id should return the same channel
+        let (_, channel_2) = call!(
+            supervisor,
+            ChannelSupervisorMessage::CreateChannel,
+            Some(id)
+        )
+        .unwrap();
+
+        assert_eq!(channel_1.get_id(), channel_2.get_id());
     }
 }
