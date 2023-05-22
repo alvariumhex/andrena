@@ -1,12 +1,14 @@
-use std::{env, fmt::format, path::Path, process::Command};
+use std::{collections::HashMap, env, fmt::format, path::Path, process::Command};
 
 use async_openai::{types::CreateTranscriptionRequestArgs, Client};
 use hound::SampleFormat;
-use log::info;
+use log::{info, warn};
 use ractor::{Actor, ActorProcessingErr, ActorRef, Message, RpcReplyPort};
+use rustube::{Id, VideoFetcher};
 
 pub enum TranscribeToolMessage {
     Transcribe(String, RpcReplyPort<Result<String, ()>>),
+    Metadata(String, RpcReplyPort<Result<HashMap<String, String>, ()>>),
 }
 
 impl Message for TranscribeToolMessage {}
@@ -98,7 +100,35 @@ impl Actor for TranscribeTool {
                 std::fs::remove_file(format!("{}.webm", file_name)).unwrap();
 
                 rpc.send(Ok(res.text)).unwrap();
-                myself.stop(Some("done".to_owned()));
+            }
+            TranscribeToolMessage::Metadata(url, port) => {
+                // TODO don't assume a valid youtube url
+
+                let Ok(id) = Id::from_raw(&url) else {
+                    warn!("Invalid youtube url: {}", url);
+                    port.send(Err(())).unwrap();
+                    return Ok(());
+                };
+
+                let descrambler = VideoFetcher::from_id(id.into_owned())
+                    .unwrap()
+                    .fetch()
+                    .await
+                    .unwrap();
+
+                let mut metadata: HashMap<String, String> = HashMap::new();
+
+                metadata.insert("title".to_owned(), descrambler.video_title().to_owned());
+                metadata.insert(
+                    "description".to_owned(),
+                    descrambler.video_details().short_description.to_owned(),
+                );
+                metadata.insert(
+                    "author".to_owned(),
+                    descrambler.video_details().author.to_owned(),
+                );
+
+                port.send(Ok(metadata)).unwrap();
             }
         }
         Ok(())
@@ -128,5 +158,35 @@ mod tests {
         // save to file
         let mut file = File::create("test_transctibe.txt").await.unwrap();
         file.write_all(rep.unwrap().as_bytes()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn metadata() {
+        let (actor, _) = Actor::spawn(None, TranscribeTool, ()).await.unwrap();
+        let rep = call!(
+            &actor,
+            TranscribeToolMessage::Metadata,
+            "https://www.youtube.com/watch?v=CEV_zDWsxGA".to_owned()
+        )
+        .unwrap();
+
+        assert!(rep.is_ok());
+        assert!(
+            rep.unwrap().get("title").unwrap()
+                == "Another perfect insult from Holt #shorts | Brooklyn Nine-Nine"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_metadata() {
+        let (actor, _) = Actor::spawn(None, TranscribeTool, ()).await.unwrap();
+        let rep = call!(
+            &actor,
+            TranscribeToolMessage::Metadata,
+            "https://www.example.com".to_owned()
+        )
+        .unwrap();
+
+        assert!(rep.is_err());
     }
 }
