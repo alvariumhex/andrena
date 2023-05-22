@@ -77,7 +77,7 @@ impl GptContext {
             );
         }
 
-        if self.history.len() > 0 {
+        if !self.history.is_empty() {
             let last_history = self.history.last().unwrap();
             chat.push(
                 ChatCompletionRequestMessageArgs::default()

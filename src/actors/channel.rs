@@ -5,11 +5,7 @@ use async_openai::{
     Client,
 };
 use log::{debug, error, info, warn};
-use ractor::{
-    actor::messages::BoxedState, call, rpc::cast, Actor, ActorProcessingErr, ActorRef,
-    BytesConvertable, Message,
-};
-use ractor_cluster::RactorClusterMessage;
+use ractor::{call, rpc::cast, Actor, ActorProcessingErr, ActorRef, BytesConvertable};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tiktoken_rs::get_chat_completion_max_tokens;
@@ -85,7 +81,7 @@ impl ChannelState {
     fn generate_response(&mut self) -> CreateChatCompletionRequest {
         debug!("Generating response for channel: {}", self.id);
         let model = self.model.clone();
-        let include_static_context = self.context.embeddings.len() > 0;
+        let include_static_context = !self.context.embeddings.is_empty();
 
         self.context.manage_tokens(&model);
         let max_tokens = get_chat_completion_max_tokens(
@@ -186,8 +182,7 @@ impl Actor for ChannelActor {
                 let name = state
                     .wakeword
                     .clone()
-                    .or(Some("Computer".to_owned()))
-                    .unwrap()
+                    .unwrap_or("Computer".to_owned())
                     .clone();
 
                 if state.wakeword.is_some()

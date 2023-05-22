@@ -1,11 +1,7 @@
 use std::collections::HashMap;
 
 use log::{info, warn};
-use ractor::{
-    Actor, ActorCell, ActorProcessingErr, ActorRef, BytesConvertable, Message, RpcReplyPort,
-    SupervisionEvent,
-};
-use ractor_cluster::RactorClusterMessage;
+use ractor::{Actor, ActorProcessingErr, ActorRef, Message, RpcReplyPort, SupervisionEvent};
 
 use super::channel::{ChannelActor, ChannelMessage, ChannelState};
 
@@ -13,6 +9,7 @@ pub struct ChannelSupervisorState {
     pub channels: HashMap<u64, ActorRef<ChannelMessage>>,
 }
 
+#[allow(dead_code)]
 pub enum ChannelSupervisorMessage {
     FetchChannel(u64, RpcReplyPort<ActorRef<ChannelMessage>>),
     ChannelExists(u64, RpcReplyPort<bool>),
@@ -20,11 +17,6 @@ pub enum ChannelSupervisorMessage {
 }
 
 impl Message for ChannelSupervisorMessage {}
-
-pub enum RefRepsonse {
-    Exists(ActorRef<ChannelMessage>),
-    DoesNotExist,
-}
 
 pub struct ChannelSupervisor;
 
@@ -72,7 +64,7 @@ impl Actor for ChannelSupervisor {
                 reply_port.send(state.channels.contains_key(&id)).unwrap();
             }
             ChannelSupervisorMessage::CreateChannel(id, reply_port) => {
-                let id = id.unwrap_or_else(|| rand::random::<u64>());
+                let id = id.unwrap_or_else(rand::random::<u64>);
 
                 if let Some(channel) = state.channels.get(&id) {
                     warn!("Channel {} already exists", id);

@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    env,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, env};
 
 use log::{error, info, trace};
 use ractor::{call, Actor, ActorProcessingErr, ActorRef, BytesConvertable};
@@ -114,10 +110,7 @@ impl Actor for DiscordActor {
         ractor::pg::join("messages_send".to_owned(), vec![myself.get_cell()]);
 
         tokio::spawn(async move {
-            let context = ClientContext {
-                myself,
-                name: args,
-            };
+            let context = ClientContext { myself, name: args };
 
             client.data.write().await.insert::<ClientContext>(context);
             client
@@ -179,7 +172,7 @@ impl Actor for DiscordActor {
                     msg.channel
                 )
                 .unwrap();
-            
+
                 channel
                     .send_message(crate::actors::channel::ChannelMessage::Register(msg))
                     .unwrap();

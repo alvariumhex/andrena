@@ -1,7 +1,9 @@
-use actors::{channel_sup::{ChannelSupervisorMessage, ChannelSupervisor}, communication::discord::DiscordActor};
-use log::{error, info, warn, debug};
-use serenity::futures::StreamExt;
+#![allow(dead_code)]
+
+use actors::{channel_sup::ChannelSupervisor, communication::discord::DiscordActor};
+use log::{debug, error, info, warn};
 use ractor::Actor;
+use serenity::futures::StreamExt;
 use tokio::net::TcpListener;
 
 mod actors;
@@ -13,14 +15,17 @@ async fn main() {
         .filter(Some("andrena"), log::LevelFilter::Trace)
         .init();
 
-        let (_, _) = Actor::spawn(None, DiscordActor, "Lovelace".to_owned())
+    let (_, _) = Actor::spawn(None, DiscordActor, "Lovelace".to_owned())
         .await
         .expect("Failed to spawn actor");
 
-    let (_, _) = Actor::spawn(Some("typing".to_owned()), actors::communication::typing::TypingActor, ())
-        .await
-        .expect("Failed to spawn actor");
-
+    let (_, _) = Actor::spawn(
+        Some("typing".to_owned()),
+        actors::communication::typing::TypingActor,
+        (),
+    )
+    .await
+    .expect("Failed to spawn actor");
 
     let server = ractor_cluster::NodeServer::new(
         8022,
@@ -42,10 +47,9 @@ async fn main() {
         info!("Connected to cluster");
     }
 
-    let (_, channel_sup) = Actor::spawn(Some(String::from("channel_sup")), ChannelSupervisor, ())
+    let (_, _) = Actor::spawn(Some(String::from("channel_sup")), ChannelSupervisor, ())
         .await
         .expect("Failed to spawn channel supervisor actor");
-
 
     // web socket listening thread
     tokio::spawn(async move {
@@ -57,12 +61,16 @@ async fn main() {
             match server.accept().await {
                 Ok((stream, _)) => {
                     debug!("Accepted connection from {:?}", stream.peer_addr());
-                    
+
                     let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
                     let (write, read) = socket.split();
-                    Actor::spawn(None, actors::communication::websocket::WebSocketActor, (write, read))
-                        .await
-                        .expect("Failed to spawn websocket actor");
+                    Actor::spawn(
+                        None,
+                        actors::communication::websocket::WebSocketActor,
+                        (write, read),
+                    )
+                    .await
+                    .expect("Failed to spawn websocket actor");
                 }
                 Err(e) => {
                     error!("Failed to accept connection: {}", e);
@@ -70,7 +78,6 @@ async fn main() {
             }
         }
     });
-
 
     tokio::signal::ctrl_c()
         .await

@@ -1,12 +1,8 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::time::Duration;
 
 use futures_util::{
-    future,
     stream::{SplitSink, SplitStream},
-    SinkExt, StreamExt, TryStreamExt,
+    SinkExt, StreamExt,
 };
 use log::{error, info, trace};
 use ractor::{Actor, ActorProcessingErr, ActorRef};

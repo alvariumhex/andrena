@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, fmt::format, path::Path, process::Command};
+use std::{collections::HashMap, env, path::Path, process::Command};
 
 use async_openai::{types::CreateTranscriptionRequestArgs, Client};
 use hound::SampleFormat;
@@ -18,7 +18,7 @@ pub struct TranscribeToolState {
 }
 
 fn parse_wav(path: &Path) -> Vec<i16> {
-    let mut reader = hound::WavReader::open(path).unwrap();
+    let reader = hound::WavReader::open(path).unwrap();
     if reader.spec().channels != 1 {
         panic!("expected mono audio file");
     }
@@ -57,7 +57,7 @@ impl Actor for TranscribeTool {
 
     async fn handle(
         &self,
-        myself: ActorRef<Self::Msg>,
+        _myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
