@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![deny(unsafe_code)]
 
 use actors::{channel_sup::ChannelSupervisor, communication::discord::DiscordActor};
 use log::{debug, error, info, warn};
