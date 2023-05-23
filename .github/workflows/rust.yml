@@ -33,8 +33,11 @@ jobs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
+          libtorch/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: ${{ runner.os }}-cargo-
+    - name: Install dependencies
+      run: source pytorch.sh
     - name: Build
       run: cargo build --verbose
     - name: Run tests
