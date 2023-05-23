@@ -50,7 +50,7 @@ impl Actor for ChannelSupervisor {
                 } else {
                     info!("Fetching channel that does not exist, creating {}", id);
                     let (channel, _) = Actor::spawn_linked(
-                        Some(format!("channel-{}", id)),
+                        Some(format!("channel-{id}")),
                         ChannelActor,
                         Some(id),
                         myself.get_cell(),
@@ -71,7 +71,7 @@ impl Actor for ChannelSupervisor {
                     reply_port.send((id, channel.clone())).unwrap();
                 } else {
                     let (channel, _) = Actor::spawn_linked(
-                        Some(format!("channel-{}", id)),
+                        Some(format!("channel-{id}")),
                         ChannelActor,
                         Some(id),
                         myself.get_cell(),
@@ -122,23 +122,12 @@ mod test {
     use super::*;
     use ractor::{call, Actor};
 
-    #[ctor::ctor]
-    fn init() {
-        pretty_env_logger::formatted_builder()
-            .filter(Some("andrena"), log::LevelFilter::Trace)
-            .init();
-    }
-
     #[tokio::test]
     async fn create_on_fetch() {
         env::set_var("OPENAI_API_KEY", "dummy_key");
         let (supervisor, _) = Actor::spawn(None, ChannelSupervisor, ()).await.unwrap();
-        let channel = call!(supervisor, ChannelSupervisorMessage::FetchChannel, 12345);
-        match channel {
-            Ok(_) => assert!(true),
-            Err(e) => panic!("Failed to fetch channel: {}", e),
-        }
-
+        call!(supervisor, ChannelSupervisorMessage::FetchChannel, 12345)
+            .expect("Failed to fetch channel");
         supervisor.kill();
     }
 
@@ -152,7 +141,7 @@ mod test {
         let exists = call!(supervisor, ChannelSupervisorMessage::ChannelExists, 1234);
         match exists {
             Ok(exists) => assert!(exists),
-            Err(e) => panic!("Failed to fetch channel: {}", e),
+            Err(e) => panic!("Failed to fetch channel: {e}"),
         }
 
         channel.stop(None); // stop channel
@@ -162,7 +151,7 @@ mod test {
         match exists {
             Ok(exists) => assert!(!exists),
             Err(e) => {
-                panic!("Failed to fetch channel: {}", e);
+                panic!("Failed to fetch channel: {e}");
             }
         }
 

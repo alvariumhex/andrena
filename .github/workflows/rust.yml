@@ -33,9 +33,18 @@ jobs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
+          libtorch/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: ${{ runner.os }}-cargo-
+    - name: Install dependencies
+      run: source pytorch.sh
     - name: Build
       run: cargo build --verbose
+      env:
+        LD_LIBRARY_PATH: ${{ github.workspace }}/libtorch/lib
+        LIBTORCH: ${{ github.workspace }}/libtorch
     - name: Run tests
       run: cargo test --verbose
+      env:
+        LD_LIBRARY_PATH: ${{ github.workspace }}/libtorch/lib
+        LIBTORCH: ${{ github.workspace }}/libtorch

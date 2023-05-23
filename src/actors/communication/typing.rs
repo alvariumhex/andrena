@@ -70,7 +70,7 @@ impl Actor for TypingActor {
             TypingMessage::Trigger => {
                 let actors = ractor::pg::get_members(&"messages_send".to_owned());
 
-                for (channel, typing) in state.channels.iter() {
+                for (channel, typing) in &state.channels {
                     if *typing {
                         trace!("Typing in channel {}", channel);
                         for actor in actors.clone() {

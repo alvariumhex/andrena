@@ -4,7 +4,7 @@
 use actors::{
     channel::ChannelMessage,
     channel_sup::{ChannelSupervisor, ChannelSupervisorMessage},
-    communication::{discord::DiscordActor, websocket::WebSocketMessage},
+    communication::discord::DiscordActor,
 };
 use log::{debug, error, info, warn};
 use ractor::{call, Actor, ActorRef};
@@ -104,7 +104,7 @@ async fn main() {
 
     tokio::spawn(async move {
         info!("Launching rocket server");
-        let _rocket = rocket::build()
+        rocket::build()
             .mount("/", routes![channel])
             .launch()
             .await
@@ -114,4 +114,14 @@ async fn main() {
     tokio::signal::ctrl_c()
         .await
         .expect("Failed to listen for ctrl-c");
+}
+
+#[cfg(test)]
+mod test {
+    #[ctor::ctor]
+    fn init() {
+        pretty_env_logger::formatted_builder()
+            // .filter(Some("andrena"), log::LevelFilter::Trace)
+            .init();
+    }
 }
