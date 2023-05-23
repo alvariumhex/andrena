@@ -115,3 +115,13 @@ async fn main() {
         .await
         .expect("Failed to listen for ctrl-c");
 }
+
+#[cfg(test)]
+mod test {
+    #[ctor::ctor]
+    fn init() {
+        pretty_env_logger::formatted_builder()
+            // .filter(Some("andrena"), log::LevelFilter::Trace)
+            .init();
+    }
+}

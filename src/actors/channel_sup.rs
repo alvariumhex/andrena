@@ -122,13 +122,6 @@ mod test {
     use super::*;
     use ractor::{call, Actor};
 
-    #[ctor::ctor]
-    fn init() {
-        pretty_env_logger::formatted_builder()
-            .filter(Some("andrena"), log::LevelFilter::Trace)
-            .init();
-    }
-
     #[tokio::test]
     async fn create_on_fetch() {
         env::set_var("OPENAI_API_KEY", "dummy_key");

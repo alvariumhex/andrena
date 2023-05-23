@@ -30,3 +30,6 @@ futures-util = "0.3.28"
 hound = "3.5.0"
 ctor = "0.2.0"
 rocket = {version = "=0.5.0-rc.3", features = ["json"]}
+sled = "0.34.7"
+hubcaps = { git = "https://github.com/softprops/hubcaps.git", branch = "master" }
+rust-bert = { git = "https://github.com/guillaume-be/rust-bert.git", branch = "master" }
