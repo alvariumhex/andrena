@@ -40,5 +40,11 @@ jobs:
       run: source pytorch.sh
     - name: Build
       run: cargo build --verbose
+      env:
+        LD_LIBRARY_PATH: ${{ github.workspace }}/libtorch/lib
+        LIBTORCH: ${{ github.workspace }}/libtorch
     - name: Run tests
       run: cargo test --verbose
+      env:
+        LD_LIBRARY_PATH: ${{ github.workspace }}/libtorch/lib
+        LIBTORCH: ${{ github.workspace }}/libtorch
