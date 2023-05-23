@@ -86,7 +86,7 @@ impl GptContext {
                     .content(last_history.1.clone())
                     .build()
                     .unwrap(),
-            )
+            );
         }
 
         chat
@@ -98,9 +98,10 @@ impl GptContext {
                 .expect("Failed to get max tokens");
         while token_count < 750 {
             info!("Reached max token count, removing oldest message from context");
-            if self.history.is_empty() {
-                panic!("History is empty but token count was reached");
-            }
+            assert!(
+                !self.history.is_empty(),
+                "History is empty but token count was reached"
+            );
             self.history.remove(0);
             token_count = get_chat_completion_max_tokens(model, &self.to_openai_chat_history(true))
                 .expect("Failed to get max tokens");

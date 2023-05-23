@@ -19,18 +19,10 @@ pub struct TranscribeToolState {
 
 fn parse_wav(path: &Path) -> Vec<i16> {
     let reader = hound::WavReader::open(path).unwrap();
-    if reader.spec().channels != 1 {
-        panic!("expected mono audio file");
-    }
-    if reader.spec().sample_format != SampleFormat::Int {
-        panic!("expected integer sample format");
-    }
-    if reader.spec().sample_rate != 16000 {
-        panic!("expected 16KHz sample rate");
-    }
-    if reader.spec().bits_per_sample != 16 {
-        panic!("expected 16 bits per sample");
-    }
+    assert!(reader.spec().channels == 1, "expected mono audio file");
+    assert!(!(reader.spec().sample_format != SampleFormat::Int), "expected integer sample format");
+    assert!(reader.spec().sample_rate == 16000, "expected 16KHz sample rate");
+    assert!(reader.spec().bits_per_sample == 16, "expected 16 bits per sample");
 
     reader
         .into_samples::<i16>()
@@ -70,25 +62,23 @@ impl Actor for TranscribeTool {
                     .arg("-f")
                     .arg("bestaudio")
                     .arg("-o")
-                    .arg(format!("{}.webm", file_name))
+                    .arg(format!("{file_name}.webm"))
                     .arg(url.clone())
                     .output()
                     .expect("failed to execute process");
 
-                if !output.status.success() {
-                    panic!(
+                assert!(output.status.success(), 
                         "Failed to download video: {}\n{}",
                         url,
                         String::from_utf8(output.stdout).unwrap()
                     );
-                }
 
                 let res = state
                     .client
                     .audio()
                     .transcribe(
                         CreateTranscriptionRequestArgs::default()
-                            .file(format!("{}.webm", file_name))
+                            .file(format!("{file_name}.webm"))
                             .model("whisper-1".to_owned())
                             .build()
                             .unwrap(),
@@ -97,7 +87,7 @@ impl Actor for TranscribeTool {
                     .unwrap();
 
                 // cleanup file
-                std::fs::remove_file(format!("{}.webm", file_name)).unwrap();
+                std::fs::remove_file(format!("{file_name}.webm")).unwrap();
 
                 rpc.send(Ok(res.text)).unwrap();
             }
@@ -118,14 +108,14 @@ impl Actor for TranscribeTool {
 
                 let mut metadata: HashMap<String, String> = HashMap::new();
 
-                metadata.insert("title".to_owned(), descrambler.video_title().to_owned());
+                metadata.insert("title".to_owned(), descrambler.video_title().clone());
                 metadata.insert(
                     "description".to_owned(),
-                    descrambler.video_details().short_description.to_owned(),
+                    descrambler.video_details().short_description.clone(),
                 );
                 metadata.insert(
                     "author".to_owned(),
-                    descrambler.video_details().author.to_owned(),
+                    descrambler.video_details().author.clone(),
                 );
 
                 port.send(Ok(metadata)).unwrap();

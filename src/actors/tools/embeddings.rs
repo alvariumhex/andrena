@@ -45,14 +45,14 @@ pub struct EmbeddingGeneratorState {
 }
 
 impl EmbeddingGeneratorState {
-    pub fn spawn() -> (JoinHandle<Result<(), ()>>, Self) {
+    pub fn spawn() -> (JoinHandle<()>, Self) {
         let (sender, receiver) = mpsc::sync_channel(100);
-        let handle = thread::spawn(move || Self::runner(receiver));
+        let handle = thread::spawn(move || Self::runner(&receiver));
 
         (handle, Self { sender })
     }
 
-    fn runner(receiver: mpsc::Receiver<SyncEmbeddingMessage>) -> Result<(), ()> {
+    fn runner(receiver: &mpsc::Receiver<SyncEmbeddingMessage>) {
         let model = SentenceEmbeddingsBuilder::remote(SentenceEmbeddingsModelType::AllMiniLmL12V2)
             .create_model()
             .expect("Could not create model");
@@ -61,8 +61,6 @@ impl EmbeddingGeneratorState {
             let embeddings = model.encode(&texts).unwrap();
             sender.send(embeddings).unwrap();
         }
-
-        Ok(())
     }
 
     pub async fn predict(&self, sentences: Vec<String>) -> Vec<Vec<f32>> {

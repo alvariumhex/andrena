@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures::{future::join_all, prelude::*};
 use hubcaps::{repositories::Repository, Credentials, Github};
 use log::{debug, error, info, trace};
-use ractor::{rpc::cast, Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
+use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 
 use super::embeddings::Embeddable;
 
@@ -98,23 +98,17 @@ impl GithubScraperActor {
         let repo_metadata = repo.get().await.unwrap();
 
         metadata.insert(String::from("provider"), String::from("github"));
-        metadata.insert(String::from("url"), String::from(file.html_url.clone()));
-        metadata.insert(
-            String::from("repo"),
-            String::from(repo_metadata.name.clone()),
-        );
-        metadata.insert(
-            String::from("author"),
-            String::from(repo_metadata.owner.login.clone()),
-        );
+        metadata.insert(String::from("url"), file.html_url.clone());
+        metadata.insert(String::from("repo"), repo_metadata.name.clone());
+        metadata.insert(String::from("author"), repo_metadata.owner.login.clone());
 
         Ok(GitHubFile {
-            content: content,
-            path: String::from(file.html_url),
-            metadata: metadata,
+            content,
+            path: file.html_url,
+            metadata,
             repo: GitHubRepo {
-                owner: String::from(repo_metadata.owner.login),
-                name: String::from(repo_metadata.name),
+                owner: repo_metadata.owner.login,
+                name: repo_metadata.name,
                 branch: String::from(branch),
             },
         })
@@ -147,7 +141,7 @@ impl GithubScraperActor {
             let contents = match maybe_contents {
                 Ok(contents) => contents,
                 Err(err) => {
-                    panic!("Failed to fetch contents: {}", err);
+                    panic!("Failed to fetch contents: {err}");
                     // TODO: Handle this error
                 }
             };
@@ -174,7 +168,7 @@ impl GithubScraperActor {
 
         let repo = state.github.repo(repo.0, repo.1);
 
-        let files = get_files_recursively(&repo, branch, "".to_string()).await?;
+        let files = get_files_recursively(&repo, branch, String::new()).await?;
 
         debug!("Found {} files", files.len());
 
@@ -191,7 +185,7 @@ impl GithubScraperActor {
                 {
                     content
                 } else {
-                    panic!("Failed to fetch file: {}", file_path_clone)
+                    panic!("Failed to fetch file: {file_path_clone}")
                 }
             };
             tasks.push(task);

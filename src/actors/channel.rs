@@ -5,11 +5,9 @@ use async_openai::{
     Client,
 };
 use log::{debug, error, info, warn};
-use ractor::{
-    call, rpc::cast, Actor, ActorProcessingErr, ActorRef, BytesConvertable, Message, RpcReplyPort,
-};
+use ractor::{call, rpc::cast, Actor, ActorProcessingErr, ActorRef, Message, RpcReplyPort};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+
 use tiktoken_rs::get_chat_completion_max_tokens;
 
 use crate::{
@@ -84,8 +82,11 @@ impl ChannelState {
             &self.context.to_openai_chat_history(include_static_context),
         )
         .unwrap();
+
         CreateChatCompletionRequestArgs::default()
-            .max_tokens((max_tokens as u16) - 110)
+            .max_tokens(
+                u16::try_from(max_tokens).expect("max_tokens value too large for openAI") - 110,
+            )
             .model(model)
             .messages(self.context.to_openai_chat_history(include_static_context))
             .build()
@@ -113,7 +114,7 @@ impl ChannelState {
                 .find_iter(&content)
                 .map(|m| m.as_str().to_owned())
                 .collect::<Vec<String>>();
-            for url in urls.iter_mut() {
+            for url in &mut urls {
                 let (trans_actor, _) = Actor::spawn(None, TranscribeTool, ()).await.unwrap();
                 let response =
                     call!(&trans_actor, TranscribeToolMessage::Transcribe, url.clone()).unwrap();
@@ -122,7 +123,7 @@ impl ChannelState {
                     Ok(response) => {
                         info!("Transcription response: {:?}", response);
                         // replace the url with the transcription
-                        let response = format!("\"{}\"", response);
+                        let response = format!("\"{response}\"");
                         content = content.replace(&url.clone(), &response);
                     }
                     _ => {
@@ -253,7 +254,7 @@ impl Actor for ChannelActor {
                 cast(&actor, TypingMessage::Stop(chat_message.channel)).unwrap();
                 let response_message = ChatMessage {
                     channel: chat_message.channel,
-                    content: response_text.clone(),
+                    content: response_text,
                     author: name.clone(),
                     metadata: HashMap::new(),
                 };
