@@ -33,3 +33,5 @@ rocket = {version = "=0.5.0-rc.3", features = ["json"]}
 sled = "0.34.7"
 hubcaps = { git = "https://github.com/softprops/hubcaps.git", branch = "master" }
 rust-bert = { git = "https://github.com/guillaume-be/rust-bert.git", branch = "master" }
+html2md = "0.2.14"
+base64 = "0.21.1"
