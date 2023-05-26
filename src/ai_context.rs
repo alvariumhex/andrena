@@ -4,7 +4,7 @@ use tiktoken_rs::{get_bpe_from_model, get_chat_completion_max_tokens};
 
 pub struct GptContext {
     pub static_context: Vec<String>,
-    pub embeddings: Vec<String>,
+    pub embeddings: Vec<(String, Vec<f32>)>,
     pub history: Vec<(String, String)>,
 }
 
@@ -71,7 +71,7 @@ impl GptContext {
                 ChatCompletionRequestMessageArgs::default()
                     .role(Role::User)
                     .name("documentation")
-                    .content(h)
+                    .content(h.0.clone())
                     .build()
                     .unwrap(),
             );
@@ -120,7 +120,7 @@ impl GptContext {
         }
 
         for h in &self.embeddings {
-            tokens += bpe.encode_ordinary(h).len();
+            tokens += bpe.encode_ordinary(&h.0).len();
         }
 
         for h in &self.history {

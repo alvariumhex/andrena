@@ -26,10 +26,3 @@ impl BytesConvertable for ChatMessage {
         bincode::deserialize(&bytes).unwrap()
     }
 }
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Embedding {
-    pub content: String,
-    pub vector: Vec<f32>,
-    pub metadata: HashMap<String, String>,
-}

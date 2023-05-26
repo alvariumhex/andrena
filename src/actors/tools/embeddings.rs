@@ -9,8 +9,6 @@ use rust_bert::pipelines::sentence_embeddings::{
 };
 use tokio::sync::oneshot;
 
-use super::github::GitHubFile;
-
 pub struct Embedding<T>
 where
     T: Embeddable,
@@ -30,11 +28,12 @@ pub struct EmbeddingGenerator;
 
 // TODO I'm not smart enough to make this generic over the Embeddable trait
 pub enum EmbeddingGeneratorMessage {
-    GithubFile(
-        Vec<GitHubFile>,
+    Generate(
+        Vec<Box<dyn Embeddable + Send + Sync>>,
         usize,
-        RpcReplyPort<Vec<Embedding<GitHubFile>>>,
+        RpcReplyPort<Vec<(String, Vec<f32>)>>,
     ),
+    Query(String, RpcReplyPort<Vec<f32>>),
 }
 
 impl ractor::Message for EmbeddingGeneratorMessage {}
@@ -92,19 +91,21 @@ impl Actor for EmbeddingGenerator {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match msg {
-            EmbeddingGeneratorMessage::GithubFile(files, size, reply_port) => {
+            EmbeddingGeneratorMessage::Generate(embeddables, size, reply_port) => {
                 let mut embeddings = Vec::new();
-                for file in files {
-                    let chunks = file.get_chunks(size);
+                for embeddable in embeddables {
+                    let chunks = embeddable.get_chunks(size);
                     let vectors = state.predict(chunks.clone()).await;
-                    let results = chunks.into_iter().zip(vectors).collect();
-                    embeddings.push(Embedding {
-                        vectors: results,
-                        source: file,
-                    });
+                    let results: Vec<(String, Vec<f32>)> =
+                        chunks.into_iter().zip(vectors).collect();
+                    embeddings.extend(results);
                 }
 
                 reply_port.send(embeddings).unwrap();
+            }
+            EmbeddingGeneratorMessage::Query(string, reply_port) => {
+                let vectors = state.predict(vec![string]).await;
+                reply_port.send(vectors[0].clone()).unwrap();
             }
         }
         Ok(())
@@ -117,7 +118,7 @@ mod tests {
 
     use ractor::call;
 
-    use crate::actors::tools::github::GitHubRepo;
+    use crate::actors::tools::github::{GitHubFile, GitHubRepo};
 
     use super::*;
 
@@ -149,15 +150,17 @@ mod tests {
                 branch: "master".to_string(),
             },
         };
+
+        let embedding = Box::new(embedding);
+
         let embedding = call!(
             actor,
-            EmbeddingGeneratorMessage::GithubFile,
+            EmbeddingGeneratorMessage::Generate,
             vec![embedding],
             300
         )
         .unwrap();
-        assert_eq!(embedding.len(), 1);
-        assert_eq!(embedding[0].vectors.len(), 3);
+        assert_eq!(embedding.len(), 3);
     }
 
     // static example file content
