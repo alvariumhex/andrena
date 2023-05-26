@@ -6,6 +6,56 @@ use log::{info, warn};
 use ractor::{Actor, ActorProcessingErr, ActorRef, Message, RpcReplyPort};
 use rustube::{Id, VideoFetcher};
 
+use super::embeddings::Embeddable;
+
+#[derive(Debug, Clone)]
+pub struct TranscriptionResult {
+    pub url: String,
+    pub text: String,
+    pub metadata: HashMap<String, String>,
+}
+
+impl Embeddable for TranscriptionResult {
+    fn human_readable_source(&self) -> String {
+        self.url.clone()
+    }
+
+    fn long_description(&self) -> String {
+        self.metadata
+            .get("description")
+            .unwrap_or(&String::new())
+            .clone()
+    }
+
+    fn short_description(&self) -> String {
+        self.metadata
+            .get("description")
+            .unwrap_or(&String::new())
+            .clone()
+    }
+
+    fn get_chunks(&self, size: usize) -> Vec<String> {
+        // metadata string
+        let metadata = format!(
+            "\ntitle: {}\n url: {}, \n description: {}",
+            self.metadata.get("title").unwrap_or(&"No Title".to_owned()),
+            self.url.clone(),
+            self.short_description(),
+        );
+
+        self.text
+            .split_whitespace()
+            .collect::<Vec<&str>>()
+            .chunks(size)
+            .map(|chunk| {
+                let mut result = chunk.join(" ");
+                result.push_str(&metadata);
+                result
+            })
+            .collect::<Vec<String>>()
+    }
+}
+
 pub enum TranscribeToolMessage {
     Transcribe(String, RpcReplyPort<Result<String, ()>>),
     Metadata(String, RpcReplyPort<Result<HashMap<String, String>, ()>>),
@@ -20,9 +70,18 @@ pub struct TranscribeToolState {
 fn parse_wav(path: &Path) -> Vec<i16> {
     let reader = hound::WavReader::open(path).unwrap();
     assert!(reader.spec().channels == 1, "expected mono audio file");
-    assert!(!(reader.spec().sample_format != SampleFormat::Int), "expected integer sample format");
-    assert!(reader.spec().sample_rate == 16000, "expected 16KHz sample rate");
-    assert!(reader.spec().bits_per_sample == 16, "expected 16 bits per sample");
+    assert!(
+        !(reader.spec().sample_format != SampleFormat::Int),
+        "expected integer sample format"
+    );
+    assert!(
+        reader.spec().sample_rate == 16000,
+        "expected 16KHz sample rate"
+    );
+    assert!(
+        reader.spec().bits_per_sample == 16,
+        "expected 16 bits per sample"
+    );
 
     reader
         .into_samples::<i16>()
@@ -59,6 +118,7 @@ impl Actor for TranscribeTool {
                 info!("Transcribing: {}", url);
                 let file_name = rand::random::<u64>().to_string();
                 let output = Command::new("yt-dlp")
+                    .arg("--no-check-certificate") // TODO dirty fix for self signed cert
                     .arg("-f")
                     .arg("bestaudio")
                     .arg("-o")
@@ -67,11 +127,12 @@ impl Actor for TranscribeTool {
                     .output()
                     .expect("failed to execute process");
 
-                assert!(output.status.success(), 
-                        "Failed to download video: {}\n{}",
-                        url,
-                        String::from_utf8(output.stdout).unwrap()
-                    );
+                assert!(
+                    output.status.success(),
+                    "Failed to download video: {}\n{}",
+                    url,
+                    String::from_utf8(output.stdout).unwrap()
+                );
 
                 let res = state
                     .client
@@ -92,8 +153,6 @@ impl Actor for TranscribeTool {
                 rpc.send(Ok(res.text)).unwrap();
             }
             TranscribeToolMessage::Metadata(url, port) => {
-                // TODO don't assume a valid youtube url
-
                 let Ok(id) = Id::from_raw(&url) else {
                     warn!("Invalid youtube url: {}", url);
                     port.send(Err(())).unwrap();
