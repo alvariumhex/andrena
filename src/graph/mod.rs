@@ -22,7 +22,7 @@ impl Graph {
     }
 
     pub fn add_or_replace_vertex(&mut self, id: String, content: String) {
-        if let Some(_) = self.get_vertex(&id) {
+        if self.get_vertex(&id).is_some() {
             self.vertices.retain(|v| v.id != id);
         }
 
@@ -70,7 +70,7 @@ impl Graph {
             dot.push_str(&format!("    {} -> {};\n", edge.from, edge.to));
         }
 
-        dot.push_str("}");
+        dot.push('}');
 
         dot
     }

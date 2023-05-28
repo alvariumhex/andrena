@@ -4,7 +4,7 @@ use async_openai::{
     types::{CreateChatCompletionRequest, CreateChatCompletionRequestArgs},
     Client,
 };
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use ractor::{call, rpc::cast, Actor, ActorProcessingErr, ActorRef, Message, RpcReplyPort};
 use regex::Regex;
 
@@ -15,7 +15,6 @@ use crate::{
         communication::{discord::ChatActorMessage, typing::TypingMessage},
         tools::{
             embeddings::{Embeddable, EmbeddingGenerator, EmbeddingGeneratorMessage},
-            github::GitHubFile,
             transcribe::{TranscribeTool, TranscribeToolMessage, TranscriptionResult},
         },
     },
@@ -23,7 +22,7 @@ use crate::{
 };
 
 use super::{
-    gpt::{ChatMessage, RemoteStoreRequestMessage},
+    gpt::{ChatMessage},
     tools::{
         embeddings::Embedding,
         github::{GithubScraperActor, GithubScraperMessage},
@@ -242,7 +241,7 @@ impl ChannelState {
                                 info!("Transcription metadata: {:?}", metadata);
                                 // replace the url with the transcription
                                 let tr = TranscriptionResult {
-                                    metadata: metadata,
+                                    metadata,
                                     text: response.clone(),
                                     url: url.clone(),
                                 };
@@ -281,19 +280,19 @@ impl ChannelState {
             }
         } else if command == "github" {
             info!("Executing github command");
-            let mut content = params.unwrap();
+            let content = params.unwrap();
             let regex = Regex::new(r"(?m)https?://(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)").unwrap();
             let mut urls = regex
                 .find_iter(&content)
                 .map(|m| m.as_str().to_owned())
                 .collect::<Vec<String>>();
-            for url in &mut urls {
+            for _url in &mut urls {
                 let github_token = env::var("GH_ACCESS_TOKEN").unwrap();
 
                 let (github_actor, _) = Actor::spawn(None, GithubScraperActor, github_token)
                     .await
                     .unwrap();
-                self.send_message(chat_message.clone(), format!("Fetching github url"));
+                self.send_message(chat_message.clone(), "Fetching github url".to_string());
 
                 let response = call!(
                     &github_actor,
@@ -307,13 +306,12 @@ impl ChannelState {
                 let files: Vec<Embedding> = response
                     .unwrap()
                     .iter()
-                    .map(|f| {
+                    .flat_map(|f| {
                         f.get_chunks(300)
                     })
-                    .flatten()
                     .map(|c| 
                         Embedding {
-                            content: c.clone(),
+                            content: c,
                             vector: vec![],
                             graph_vertex: String::new(),
                         }
@@ -333,7 +331,7 @@ impl ChannelState {
 
                 self.send_message(
                     chat_message.clone(),
-                    format!("Finished fetching github url"),
+                    "Finished fetching github url".to_string(),
                 );
             }
         }

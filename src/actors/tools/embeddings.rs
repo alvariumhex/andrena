@@ -85,7 +85,7 @@ impl Actor for EmbeddingGenerator {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match msg {
-            EmbeddingGeneratorMessage::Generate(embeddables, size, reply_port) => {
+            EmbeddingGeneratorMessage::Generate(embeddables, _size, reply_port) => {
                 let mut embeddings = Vec::new();
                 for embeddable in embeddables {
                     let vectors = state.predict(vec![embeddable.content.clone()]).await;
