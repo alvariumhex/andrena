@@ -9,12 +9,10 @@ use rust_bert::pipelines::sentence_embeddings::{
 };
 use tokio::sync::oneshot;
 
-pub struct Embedding<T>
-where
-    T: Embeddable,
-{
-    pub vectors: Vec<(String, Vec<f32>)>,
-    pub source: T,
+pub struct Embedding {
+    pub vector: Vec<f32>,
+    pub graph_vertex: String,
+    pub content: String,
 }
 
 pub trait Embeddable {
@@ -28,11 +26,7 @@ pub struct EmbeddingGenerator;
 
 // TODO I'm not smart enough to make this generic over the Embeddable trait
 pub enum EmbeddingGeneratorMessage {
-    Generate(
-        Vec<Box<dyn Embeddable + Send + Sync>>,
-        usize,
-        RpcReplyPort<Vec<(String, Vec<f32>)>>,
-    ),
+    Generate(Vec<Embedding>, usize, RpcReplyPort<Vec<Embedding>>),
     Query(String, RpcReplyPort<Vec<f32>>),
 }
 
@@ -94,11 +88,12 @@ impl Actor for EmbeddingGenerator {
             EmbeddingGeneratorMessage::Generate(embeddables, size, reply_port) => {
                 let mut embeddings = Vec::new();
                 for embeddable in embeddables {
-                    let chunks = embeddable.get_chunks(size);
-                    let vectors = state.predict(chunks.clone()).await;
-                    let results: Vec<(String, Vec<f32>)> =
-                        chunks.into_iter().zip(vectors).collect();
-                    embeddings.extend(results);
+                    let vectors = state.predict(vec![embeddable.content.clone()]).await;
+                    embeddings.push(Embedding {
+                        vector: vectors[0].clone(),
+                        graph_vertex: embeddable.graph_vertex,
+                        content: embeddable.content,
+                    })
                 }
 
                 reply_port.send(embeddings).unwrap();
@@ -151,15 +146,17 @@ mod tests {
             },
         };
 
-        let embedding = Box::new(embedding);
+        let embedding = embedding
+            .get_chunks(300)
+            .iter()
+            .map(|c| Embedding {
+                content: c.clone(),
+                graph_vertex: "test".to_string(),
+                vector: vec![],
+            })
+            .collect();
 
-        let embedding = call!(
-            actor,
-            EmbeddingGeneratorMessage::Generate,
-            vec![embedding],
-            300
-        )
-        .unwrap();
+        let embedding = call!(actor, EmbeddingGeneratorMessage::Generate, embedding, 300).unwrap();
         assert_eq!(embedding.len(), 3);
     }
 

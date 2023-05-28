@@ -14,7 +14,8 @@ use crate::{
     actors::{
         communication::{discord::ChatActorMessage, typing::TypingMessage},
         tools::{
-            embeddings::{EmbeddingGenerator, EmbeddingGeneratorMessage},
+            embeddings::{Embeddable, EmbeddingGenerator, EmbeddingGeneratorMessage},
+            github::GitHubFile,
             transcribe::{TranscribeTool, TranscribeToolMessage, TranscriptionResult},
         },
     },
@@ -23,7 +24,10 @@ use crate::{
 
 use super::{
     gpt::{ChatMessage, RemoteStoreRequestMessage},
-    tools::embeddings::Embedding,
+    tools::{
+        embeddings::Embedding,
+        github::{GithubScraperActor, GithubScraperMessage},
+    },
 };
 
 #[derive(Debug)]
@@ -77,17 +81,17 @@ impl ChannelState {
         self.context.history.clear();
     }
 
-    async fn fetch_embeddings(&self, query: String, limit: u8) -> Vec<(String, f32)> {
+    async fn fetch_embeddings(&self, query: String, limit: u8) -> Vec<(&Embedding, f32)> {
         // TODO spawn one child actor to handle this and store it in state so we don't have to recreate the actor every message
         let (embed_actor, _) = Actor::spawn(None, EmbeddingGenerator, ()).await.unwrap();
         let query_embedding: Vec<f32> =
             call!(embed_actor, EmbeddingGeneratorMessage::Query, query).unwrap();
 
-        let mut sorted_embeds: Vec<(String, f32)> = Vec::new();
+        let mut sorted_embeds: Vec<(&Embedding, f32)> = Vec::new();
         self.context.embeddings.iter().for_each(|e| {
             sorted_embeds.push((
-                e.0.clone(),
-                cosine_dist(&e.1, query_embedding.as_slice(), &query_embedding.len()),
+                e,
+                cosine_dist(&e.vector, query_embedding.as_slice(), &query_embedding.len()),
             ))
         });
         sorted_embeds.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -130,15 +134,15 @@ impl ChannelState {
             "Embeddings distances: {:?}",
             embeddings.iter().map(|e| e.1).collect::<Vec<f32>>()
         );
-        let mut embeddings: Vec<String> = embeddings
+        let mut embeddings: Vec<&Embedding> = embeddings
             .iter()
             .filter(|e| e.1 < 0.25)
-            .map(|(s, _)| s.clone())
+            .map(|(s, _)| *s)
             .collect();
 
         // reverse so that the most similar item is latest in the context, this improves the quality of the response
         embeddings.reverse();
-        debug!("Embeddings {}: {:?}", embeddings.len(), embeddings);
+        debug!("Embeddings {}", embeddings.len());
 
         let request = self.create_response_request();
         let response = self.client.chat().create(request).await;
@@ -172,7 +176,7 @@ impl ChannelState {
         self.context.clear_embeddings();
     }
 
-    fn insert_embeddings(&mut self, embeddings: Vec<(String, Vec<f32>)>) {
+    fn insert_embeddings(&mut self, embeddings: Vec<Embedding>) {
         self.context.embeddings.extend(embeddings);
     }
 
@@ -203,6 +207,7 @@ impl ChannelState {
         chat_message: ChatMessage,
     ) {
         if command == "transcribe" {
+            info!("Executing transcribe command");
             let mut content = params.unwrap();
             let regex = Regex::new(r"(?m)https?://(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)").unwrap();
             let mut urls = regex
@@ -242,12 +247,22 @@ impl ChannelState {
                                     url: url.clone(),
                                 };
 
+                                let chunks: Vec<Embedding> = tr
+                                    .get_chunks(300)
+                                    .iter()
+                                    .map(|c| Embedding {
+                                        content: c.clone(),
+                                        vector: vec![],
+                                        graph_vertex: String::new(),
+                                    })
+                                    .collect();
+
                                 let (embed_actor, _) =
                                     Actor::spawn(None, EmbeddingGenerator, ()).await.unwrap();
                                 let embeddings = call!(
                                     &embed_actor,
                                     EmbeddingGeneratorMessage::Generate,
-                                    vec![Box::new(tr)],
+                                    chunks,
                                     300
                                 )
                                 .unwrap();
@@ -263,6 +278,63 @@ impl ChannelState {
                         info!("Transcription failed for url {}", url);
                     }
                 }
+            }
+        } else if command == "github" {
+            info!("Executing github command");
+            let mut content = params.unwrap();
+            let regex = Regex::new(r"(?m)https?://(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)").unwrap();
+            let mut urls = regex
+                .find_iter(&content)
+                .map(|m| m.as_str().to_owned())
+                .collect::<Vec<String>>();
+            for url in &mut urls {
+                let github_token = env::var("GH_ACCESS_TOKEN").unwrap();
+
+                let (github_actor, _) = Actor::spawn(None, GithubScraperActor, github_token)
+                    .await
+                    .unwrap();
+                self.send_message(chat_message.clone(), format!("Fetching github url"));
+
+                let response = call!(
+                    &github_actor,
+                    GithubScraperMessage::ScrapeRepo,
+                    "awsdocs".to_owned(),
+                    "aws-iot-greengrass-v2-developer-guide".to_owned(),
+                    "main".to_owned()
+                )
+                .unwrap();
+
+                let files: Vec<Embedding> = response
+                    .unwrap()
+                    .iter()
+                    .map(|f| {
+                        f.get_chunks(300)
+                    })
+                    .flatten()
+                    .map(|c| 
+                        Embedding {
+                            content: c.clone(),
+                            vector: vec![],
+                            graph_vertex: String::new(),
+                        }
+                    )
+                    .collect();
+
+                let (embed_actor, _) = Actor::spawn(None, EmbeddingGenerator, ()).await.unwrap();
+                let embeddings = call!(
+                    &embed_actor,
+                    EmbeddingGeneratorMessage::Generate,
+                    files,
+                    300
+                )
+                .unwrap();
+
+                self.insert_embeddings(embeddings);
+
+                self.send_message(
+                    chat_message.clone(),
+                    format!("Finished fetching github url"),
+                );
             }
         }
     }
@@ -304,7 +376,7 @@ impl Actor for ChannelActor {
             model: "gpt-3.5-turbo".to_owned(),
             client,
             context,
-            tools: vec!["transcribe".to_owned()],
+            tools: vec!["transcribe".to_owned(), "github".to_owned()],
         })
     }
 
@@ -325,8 +397,8 @@ impl Actor for ChannelActor {
                     .clone();
 
                 if content.starts_with('!') {
-                    debug!("command invoked");
                     let (command, params) = command_extract(&content);
+                    debug!("command invoked with {} and {:?}", command, params);
                     state
                         .execute_command(command, params, chat_message.clone())
                         .await;

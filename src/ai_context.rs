@@ -2,9 +2,11 @@ use async_openai::types::{ChatCompletionRequestMessage, ChatCompletionRequestMes
 use log::info;
 use tiktoken_rs::{get_bpe_from_model, get_chat_completion_max_tokens};
 
+use crate::actors::tools::embeddings::Embedding;
+
 pub struct GptContext {
     pub static_context: Vec<String>,
-    pub embeddings: Vec<(String, Vec<f32>)>,
+    pub embeddings: Vec<Embedding>,
     pub history: Vec<(String, String)>,
 }
 
@@ -71,7 +73,7 @@ impl GptContext {
                 ChatCompletionRequestMessageArgs::default()
                     .role(Role::User)
                     .name("documentation")
-                    .content(h.0.clone())
+                    .content(h.content.clone())
                     .build()
                     .unwrap(),
             );
@@ -120,7 +122,7 @@ impl GptContext {
         }
 
         for h in &self.embeddings {
-            tokens += bpe.encode_ordinary(&h.0).len();
+            tokens += bpe.encode_ordinary(&h.content).len();
         }
 
         for h in &self.history {
