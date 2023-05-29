@@ -12,7 +12,7 @@ use rocket::serde::json::Json;
 use serenity::futures::StreamExt;
 use tokio::net::TcpListener;
 
-use crate::confluence::session::{Session, Page};
+
 
 mod actors;
 mod ai_context;
@@ -105,22 +105,6 @@ async fn main() {
             }
         }
     });
-
-    let session = Session::new(
-        "hannah.witvrouwen@external.engie.com".to_string(),
-        "ATATT3xFfGF0THDKVl2OOnNGvFnXqpvcWrwYg9CcYDYLaLrzBaPeU1ci19KCJBegB9-A1G-MNG7kxJOfefS_-nZiuudX0vRgVioKS2O4KHmygxXyP9WqIEXPzsI9WhraGvtXVkohBBmo-aHe4-XMZ-kML0oGeFMPtH596SEhkemiLdMNKLltO-s=461D2524".to_string(),
-        "https://laborelec.atlassian.net/wiki".to_string(),
-    );
-    let page: Page = session.get_page_by_id(90440047).await.expect("Failed to get page");
-    let md = html2md::parse_html(&page.body.view.value);
-    let md = md.replace("/wiki/", "https://laborelec.atlassian.net/wiki/");
-    info!("Page: {:?}\n{:?}", page.title, md);
-
-    let spaces = session.get_spaces().await.expect("Failed to get spaces");
-    for space in spaces {
-        let pages = session.get_pages_for_space(&space.key, None).await.unwrap();
-        info!("Space({:?}): {:?} with {} pages", space.key, space.name, pages.len());
-    }
 
     tokio::spawn(async move {
         info!("Launching rocket server");
