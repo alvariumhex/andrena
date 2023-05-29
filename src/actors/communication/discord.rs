@@ -89,6 +89,30 @@ impl TypeMapKey for ClientContext {
     type Value = ClientContext;
 }
 
+fn split_string(s: &str, max_len: usize) -> Vec<String> {
+    let mut result: Vec<String> = vec![];
+    let mut start = 0;
+    let mut end;
+
+    while start < s.len() {
+        if start + max_len < s.len() {
+            end = s.char_indices()
+                .enumerate()
+                .skip_while(|(i, _)| *i < start + max_len)
+                .map(|(_, (j, _))| j)
+                .find(|&j| s[j..].starts_with('\n') || s[j..].starts_with(' '))
+                .unwrap_or(s.len());
+        } else {
+            end = s.len();
+        }
+
+        result.push(s[start..end].to_string());
+        start = end + 1;
+    }
+
+    result
+}
+
 #[async_trait]
 impl Actor for DiscordActor {
     type State = DiscordState;
@@ -135,9 +159,12 @@ impl Actor for DiscordActor {
         match msg {
             ChatActorMessage::Send(msg) => {
                 if state.channels.contains(&msg.channel) {
-                    trace!("Sending message: {}", msg.content);
-                    let channel = ChannelId(msg.channel);
-                    channel.say(&state.http, msg.content).await.unwrap();
+                    let messages = split_string(&msg.content, 2000);
+                    for message in messages {
+                        trace!("Sending message: {}", message);
+                        let channel = ChannelId(msg.channel);
+                        channel.say(&state.http, message).await.unwrap();
+                    }
                 }
                 Ok(())
             }
@@ -179,5 +206,27 @@ impl Actor for DiscordActor {
                 Ok(())
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_string() {
+        let input = "This is a test string.\nIt has multiple lines and some very long lines without a newline character to test the splitting on whitespace functionality. The purpose of the test is to ensure that the split_string function works as expected and provides the correct output.";
+        let max_len = 40;
+
+        let result = split_string(input, max_len);
+        println!("Result: {:?}", result);
+
+        assert_eq!(result.len(), 7);
+
+        // assert_eq!(result[0], "This is a test string.\nIt has multiple lines");
+        // assert_eq!(result[1], " and some very long lines without a newline");
+        // assert_eq!(result[2], " character");
+        // assert_eq!(result[3], "to test the splitting on whitespace");
     }
 }
