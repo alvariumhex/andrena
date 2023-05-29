@@ -22,7 +22,7 @@ use crate::{
 };
 
 use super::{
-    gpt::{ChatMessage},
+    gpt::ChatMessage,
     tools::{
         embeddings::Embedding,
         github::{GithubScraperActor, GithubScraperMessage},
@@ -83,6 +83,13 @@ impl ChannelState {
     async fn fetch_embeddings(&self, query: String, limit: u8) -> Vec<(&Embedding, f32)> {
         // TODO spawn one child actor to handle this and store it in state so we don't have to recreate the actor every message
         let (embed_actor, _) = Actor::spawn(None, EmbeddingGenerator, ()).await.unwrap();
+        let mut query = query;
+
+        // remove wakeword from query to improve embedding accuracy
+        if self.wakeword.is_some() {
+            query = query.replace(&self.wakeword.clone().unwrap(), "");
+        }
+
         let query_embedding: Vec<f32> =
             call!(embed_actor, EmbeddingGeneratorMessage::Query, query).unwrap();
 
@@ -90,7 +97,11 @@ impl ChannelState {
         self.context.embeddings.iter().for_each(|e| {
             sorted_embeds.push((
                 e,
-                cosine_dist(&e.vector, query_embedding.as_slice(), &query_embedding.len()),
+                cosine_dist(
+                    &e.vector,
+                    query_embedding.as_slice(),
+                    &query_embedding.len(),
+                ),
             ))
         });
         sorted_embeds.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -133,15 +144,16 @@ impl ChannelState {
             "Embeddings distances: {:?}",
             embeddings.iter().map(|e| e.1).collect::<Vec<f32>>()
         );
-        let mut embeddings: Vec<&Embedding> = embeddings
+        let mut embeddings: Vec<Embedding> = embeddings
             .iter()
-            .filter(|e| e.1 < 0.25)
-            .map(|(s, _)| *s)
+            .filter(|e| e.1 < 0.35)
+            .map(|(s, _)| (*s).clone())
             .collect();
 
         // reverse so that the most similar item is latest in the context, this improves the quality of the response
         embeddings.reverse();
         debug!("Embeddings {}", embeddings.len());
+        self.context.selected_embeddings = embeddings.iter().map(|e| e.clone()).collect();
 
         let request = self.create_response_request();
         let response = self.client.chat().create(request).await;
@@ -217,7 +229,7 @@ impl ChannelState {
                 let (trans_actor, _) = Actor::spawn(None, TranscribeTool, ()).await.unwrap();
                 self.send_message(
                     chat_message.clone(),
-                    format!("Transcribing url {}", url.clone()),
+                    format!("Transcribing url"),
                 );
 
                 let response =
@@ -228,7 +240,7 @@ impl ChannelState {
 
                 self.send_message(
                     chat_message.clone(),
-                    format!("Finished transcribing url {}", url.clone()),
+                    format!("Finished transcribing url"),
                 );
 
                 match response {
@@ -252,7 +264,7 @@ impl ChannelState {
                                     .map(|c| Embedding {
                                         content: c.clone(),
                                         vector: vec![],
-                                        graph_vertex: String::new(),
+                                        graph_vertex: url.clone(),
                                     })
                                     .collect();
 
@@ -306,17 +318,22 @@ impl ChannelState {
                 let files: Vec<Embedding> = response
                     .unwrap()
                     .iter()
-                    .flat_map(|f| {
-                        f.get_chunks(300)
+                    .map(|f| (f, f.get_chunks(300)))
+                    .flat_map(|t| {
+                        t.1.iter()
+                            .map(|c| Embedding {
+                                content: c.clone(),
+                                vector: vec![],
+                                graph_vertex: t.0.metadata.get("url").unwrap().clone(),
+                            })
+                            .collect::<Vec<Embedding>>()
                     })
-                    .map(|c| 
-                        Embedding {
-                            content: c,
-                            vector: vec![],
-                            graph_vertex: String::new(),
-                        }
-                    )
                     .collect();
+
+                self.send_message(
+                    chat_message.clone(),
+                    format!("Fetched {} files, processing them", files.len()),
+                );
 
                 let (embed_actor, _) = Actor::spawn(None, EmbeddingGenerator, ()).await.unwrap();
                 let embeddings = call!(
@@ -329,9 +346,50 @@ impl ChannelState {
 
                 self.insert_embeddings(embeddings);
 
+                debug!(
+                    "Finished processing files, new embedding count: {}",
+                    self.context.embeddings.len()
+                );
+
                 self.send_message(
                     chat_message.clone(),
                     "Finished fetching github url".to_string(),
+                );
+            }
+        } else if command == "debug" {
+            self.send_message(chat_message.clone(), "Utilized embeddings:".to_owned());
+            for embed in &self.context.selected_embeddings {
+                self.send_message(
+                    chat_message.clone(),
+                    format!("source: {}\ncontent {}", embed.graph_vertex, embed.content),
+                );
+            }
+
+            self.send_message(
+                chat_message,
+                format!(
+                    "Current embeddings available for channel: {}",
+                    self.context.embeddings.len()
+                ),
+            );
+        } else if command == "model" {
+            if let Some(model) = params {
+                if model != "gpt-3.5-turbo" && model != "gpt-4" && model != "gpt-4-32k	" {
+                    self.send_message(
+                        chat_message,
+                        format!("Unknown model {}, defaulting to gpt-3.5-turbo\nAvailable models: gpt-3.5-turbo, gpt-4, gpt-4-32k", model),
+                    );
+                    return;
+                }
+                self.model = model;
+                self.send_message(
+                    chat_message,
+                    format!("Set model to {}", self.model),
+                );
+            } else {
+                self.send_message(
+                    chat_message,
+                    format!("Current model is {}", self.model),
                 );
             }
         }

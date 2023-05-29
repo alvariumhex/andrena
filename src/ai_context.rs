@@ -7,6 +7,7 @@ use crate::actors::tools::embeddings::Embedding;
 pub struct GptContext {
     pub static_context: Vec<String>,
     pub embeddings: Vec<Embedding>,
+    pub selected_embeddings: Vec<Embedding>,
     pub history: Vec<(String, String)>,
 }
 
@@ -16,6 +17,7 @@ impl GptContext {
             static_context: Vec::new(),
             history: Vec::new(),
             embeddings: Vec::new(),
+            selected_embeddings: Vec::new(),
         }
     }
 
@@ -68,7 +70,7 @@ impl GptContext {
 
         chat.pop();
 
-        for h in &self.embeddings {
+        for h in &self.selected_embeddings {
             chat.push(
                 ChatCompletionRequestMessageArgs::default()
                     .role(Role::User)

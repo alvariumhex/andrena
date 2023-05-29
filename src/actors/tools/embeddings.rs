@@ -9,6 +9,7 @@ use rust_bert::pipelines::sentence_embeddings::{
 };
 use tokio::sync::oneshot;
 
+#[derive(Debug, Clone)]
 pub struct Embedding {
     pub vector: Vec<f32>,
     pub graph_vertex: String,
@@ -86,6 +87,7 @@ impl Actor for EmbeddingGenerator {
     ) -> Result<(), ActorProcessingErr> {
         match msg {
             EmbeddingGeneratorMessage::Generate(embeddables, _size, reply_port) => {
+                info!("Generating embeddings for {} embeddables", embeddables.len());
                 let mut embeddings = Vec::new();
                 for embeddable in embeddables {
                     let vectors = state.predict(vec![embeddable.content.clone()]).await;
