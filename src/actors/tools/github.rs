@@ -167,6 +167,18 @@ impl GithubScraperActor {
         }
 
         let repo = state.github.repo(repo.0, repo.1);
+        let mut branch = branch;
+        if branch == "default" {
+            if repo.branches().get("master").await.is_ok() {
+                branch = "master";
+            }
+
+            if repo.branches().get("main").await.is_ok() {
+                branch = "main";
+            }
+        }
+
+        assert!(branch != "default", "No default branch found for repo");
 
         let files = get_files_recursively(&repo, branch, String::new()).await?;
 

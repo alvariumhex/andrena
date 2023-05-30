@@ -306,12 +306,18 @@ impl ChannelState {
                     .unwrap();
                 self.send_message(chat_message.clone(), "Fetching github url".to_string());
 
+                // hardcoded for now
+                let regex = Regex::new(r"(?m).*github\.com/([\w\-_]+)/([\w\-_]+)(.+)?").unwrap();
+                let captures = regex.captures(&_url).unwrap();
+                let owner = captures.get(1).unwrap().as_str();
+                let repo = captures.get(2).unwrap().as_str();
+
                 let response = call!(
                     &github_actor,
                     GithubScraperMessage::ScrapeRepo,
-                    "awsdocs".to_owned(),
-                    "aws-iot-greengrass-v2-developer-guide".to_owned(),
-                    "main".to_owned()
+                    owner.to_owned(),
+                    repo.to_owned(),
+                    "default".to_owned()
                 )
                 .unwrap();
 
