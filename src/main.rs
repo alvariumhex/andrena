@@ -89,15 +89,18 @@ async fn main() {
                 Ok((stream, _)) => {
                     debug!("Accepted connection from {:?}", stream.peer_addr());
 
-                    let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-                    let (write, read) = socket.split();
-                    Actor::spawn(
-                        None,
-                        actors::communication::websocket::WebSocketActor,
-                        (write, read),
-                    )
-                    .await
-                    .expect("Failed to spawn websocket actor");
+                    if let Ok(socket) = tokio_tungstenite::accept_async(stream).await {
+                        let (write, read) = socket.split();
+                        Actor::spawn(
+                            None,
+                            actors::communication::websocket::WebSocketActor,
+                            (write, read),
+                        )
+                        .await
+                        .expect("Failed to spawn websocket actor");
+                    } else {
+                        error!("Failed to accept websocket connection");
+                    }
                 }
                 Err(e) => {
                     error!("Failed to accept connection: {}", e);
