@@ -1,12 +1,12 @@
 use std::{collections::HashMap, env};
 
 use log::{error, info, trace};
-use ractor::{call, Actor, ActorProcessingErr, ActorRef, BytesConvertable};
+use ractor::{call, Actor, ActorProcessingErr, ActorRef, BytesConvertable, Message};
 use serde::{Deserialize, Serialize};
 use serenity::{
     async_trait,
     http::Http,
-    model::prelude::{ChannelId, Message, Ready},
+    model::prelude::{ChannelId, Message as DiscordMessage, Ready},
     prelude::{Context, EventHandler, GatewayIntents, TypeMapKey},
     Client,
 };
@@ -25,15 +25,7 @@ pub enum ChannelMessage {
     SetModel(String),
 }
 
-impl BytesConvertable for ChannelMessage {
-    fn into_bytes(self) -> Vec<u8> {
-        bincode::serialize(&self).unwrap()
-    }
-
-    fn from_bytes(bytes: Vec<u8>) -> Self {
-        bincode::deserialize(&bytes).unwrap()
-    }
-}
+impl Message for ChannelMessage {}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ChatActorMessage {
@@ -42,15 +34,7 @@ pub enum ChatActorMessage {
     Receive(ChatMessage),
 }
 
-impl BytesConvertable for ChatActorMessage {
-    fn into_bytes(self) -> Vec<u8> {
-        bincode::serialize(&self).unwrap()
-    }
-
-    fn from_bytes(bytes: Vec<u8>) -> Self {
-        bincode::deserialize(&bytes).unwrap()
-    }
-}
+impl Message for ChatActorMessage {}
 
 pub struct DiscordState {
     http: Http,
@@ -59,7 +43,7 @@ pub struct DiscordState {
 
 #[async_trait]
 impl EventHandler for DiscordActor {
-    async fn message(&self, context: Context, message: Message) {
+    async fn message(&self, context: Context, message: DiscordMessage) {
         let data_read = context.data.read().await;
         let data = data_read.get::<ClientContext>().unwrap();
         let mut metadata: HashMap<String, String> = HashMap::new();
@@ -96,7 +80,8 @@ fn split_string(s: &str, max_len: usize) -> Vec<String> {
 
     while start < s.len() {
         if start + max_len < s.len() {
-            end = s.char_indices()
+            end = s
+                .char_indices()
                 .enumerate()
                 .skip_while(|(i, _)| *i < start + max_len)
                 .map(|(_, (j, _))| j)
@@ -208,7 +193,6 @@ impl Actor for DiscordActor {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

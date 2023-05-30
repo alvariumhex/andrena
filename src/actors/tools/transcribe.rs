@@ -1,12 +1,10 @@
 use std::{collections::HashMap, env, path::Path, process::Command};
 
+use super::embeddings::Embeddable;
 use async_openai::{types::CreateTranscriptionRequestArgs, Client};
-use hound::SampleFormat;
 use log::{info, warn};
 use ractor::{Actor, ActorProcessingErr, ActorRef, Message, RpcReplyPort};
 use rustube::{Id, VideoFetcher};
-
-use super::embeddings::Embeddable;
 
 #[derive(Debug, Clone)]
 pub struct TranscriptionResult {
@@ -66,29 +64,6 @@ impl Message for TranscribeToolMessage {}
 pub struct TranscribeToolState {
     client: Client,
 }
-
-fn parse_wav(path: &Path) -> Vec<i16> {
-    let reader = hound::WavReader::open(path).unwrap();
-    assert!(reader.spec().channels == 1, "expected mono audio file");
-    assert!(
-        !(reader.spec().sample_format != SampleFormat::Int),
-        "expected integer sample format"
-    );
-    assert!(
-        reader.spec().sample_rate == 16000,
-        "expected 16KHz sample rate"
-    );
-    assert!(
-        reader.spec().bits_per_sample == 16,
-        "expected 16 bits per sample"
-    );
-
-    reader
-        .into_samples::<i16>()
-        .map(|x| x.expect("sample"))
-        .collect::<Vec<_>>()
-}
-
 pub struct TranscribeTool;
 
 #[async_trait::async_trait]

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use log::{info, trace};
-use ractor::{BytesConvertable, Actor, ActorRef, ActorProcessingErr, rpc::cast};
+use ractor::{Actor, ActorRef, Message, ActorProcessingErr, rpc::cast};
 use serde::{Serialize, Deserialize};
 use serenity::async_trait;
 
@@ -15,15 +15,7 @@ pub enum TypingMessage {
     Trigger,
 }
 
-impl BytesConvertable for TypingMessage {
-    fn into_bytes(self) -> Vec<u8> {
-        bincode::serialize(&self).unwrap()
-    }
-
-    fn from_bytes(bytes: Vec<u8>) -> Self {
-        bincode::deserialize(&bytes).unwrap()
-    }
-}
+impl Message for TypingMessage {}
 
 pub struct TypingState {
     pub channels: HashMap<u64, bool>,
