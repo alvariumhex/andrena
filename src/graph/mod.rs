@@ -70,10 +70,7 @@ impl Graph {
         dot.push_str("digraph {\n");
 
         for vertex in &self.vertices {
-            dot.push_str(&format!(
-                "    {}\n",
-                vertex.id
-            ));
+            dot.push_str(&format!("    {}\n", vertex.id));
         }
 
         for edge in &self.edges {
@@ -94,8 +91,8 @@ mod tests {
     fn test_graph_using_dot() {
         let mut graph = Graph::new();
 
-        graph.add_or_replace_vertex("1".to_string(), "Vertex 1".to_string());
-        graph.add_or_replace_vertex("2".to_string(), "Vertex 2".to_string());
+        graph.add_or_replace_vertex("1".to_string(), HashMap::new());
+        graph.add_or_replace_vertex("2".to_string(), HashMap::new());
 
         graph.add_edge("1".to_string(), "2".to_string());
 

@@ -164,7 +164,7 @@ async fn main() {
                 Regex::new(r"(?m)\(https://laborelec\.atlassian\.net/wiki/.*/pages/(\d+)/?.*\)")
                     .unwrap();
             let result = regex.captures_iter(&md);
-            let link = page.links._self;
+            let link = page.links.clone()._self;
             for cap in result {
                 let id = cap.get(1).unwrap().as_str();
                 let link_to = format!(
@@ -182,6 +182,17 @@ async fn main() {
             metadata.insert("space_key".to_owned(), space.key.clone());
             metadata.insert("id".to_owned(), page.id.clone());
             metadata.insert("content".to_owned(), md.clone());
+
+            if page.links.clone().webui.is_some() {
+                let source = format!(
+                    "https://laborelec.atlassian.net/wiki{}",
+                    page.links.clone().webui.unwrap()
+                );
+                metadata.insert("source".to_owned(), source);
+            } else {
+                trace!("No source for page {:?}", page.id);
+                trace!("Links: {:?}", page.links);
+            }
 
             graph.add_or_replace_vertex(link, metadata);
         }
