@@ -19,6 +19,8 @@ pub struct Page {
     pub status: String,
     pub space: Space,
     pub body: Body,
+    #[serde(rename = "_links")]
+    pub links: Links,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

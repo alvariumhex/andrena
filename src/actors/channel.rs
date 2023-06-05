@@ -153,7 +153,7 @@ impl ChannelState {
         // reverse so that the most similar item is latest in the context, this improves the quality of the response
         embeddings.reverse();
         debug!("Embeddings {}", embeddings.len());
-        self.context.selected_embeddings = embeddings.iter().map(|e| e.clone()).collect();
+        self.context.selected_embeddings = embeddings.to_vec();
 
         let request = self.create_response_request();
         let response = self.client.chat().create(request).await;
@@ -229,7 +229,7 @@ impl ChannelState {
                 let (trans_actor, _) = Actor::spawn(None, TranscribeTool, ()).await.unwrap();
                 self.send_message(
                     chat_message.clone(),
-                    format!("Transcribing url"),
+                    "Transcribing url".to_string(),
                 );
 
                 let response =
@@ -240,7 +240,7 @@ impl ChannelState {
 
                 self.send_message(
                     chat_message.clone(),
-                    format!("Finished transcribing url"),
+                    "Finished transcribing url".to_string(),
                 );
 
                 match response {
@@ -308,7 +308,7 @@ impl ChannelState {
 
                 // hardcoded for now
                 let regex = Regex::new(r"(?m).*github\.com/([\w\-_]+)/([\w\-_]+)(.+)?").unwrap();
-                let captures = regex.captures(&_url).unwrap();
+                let captures = regex.captures(_url).unwrap();
                 let owner = captures.get(1).unwrap().as_str();
                 let repo = captures.get(2).unwrap().as_str();
 

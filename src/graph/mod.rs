@@ -1,13 +1,20 @@
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Vertex {
     pub id: String,
-    pub content: String,
+    pub content: HashMap<String, String>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Edge {
     pub from: String,
     pub to: String,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Graph {
     pub vertices: Vec<Vertex>,
     pub edges: Vec<Edge>,
@@ -21,12 +28,15 @@ impl Graph {
         }
     }
 
-    pub fn add_or_replace_vertex(&mut self, id: String, content: String) {
+    pub fn add_or_replace_vertex(&mut self, id: String, metadata: HashMap<String, String>) {
         if self.get_vertex(&id).is_some() {
             self.vertices.retain(|v| v.id != id);
         }
 
-        self.vertices.push(Vertex { id, content });
+        self.vertices.push(Vertex {
+            id,
+            content: metadata,
+        });
     }
 
     pub fn add_edge(&mut self, from: String, to: String) {
@@ -61,8 +71,8 @@ impl Graph {
 
         for vertex in &self.vertices {
             dot.push_str(&format!(
-                "    {} [label=\"{}\"];\n",
-                vertex.id, vertex.content
+                "    {}\n",
+                vertex.id
             ));
         }
 

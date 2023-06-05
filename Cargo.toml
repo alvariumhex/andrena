@@ -6,7 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-serenity = { version = "0.11.5", default-features = false, features = ["client", "gateway", "rustls_backend", "model", "voice"] }
+serenity = { version = "0.11.5", default-features = false, features = [
+    "client",
+    "gateway",
+    "rustls_backend",
+    "model",
+    "voice",
+] }
 async-openai = "0.10.1"
 async-recursion = "1.0.4"
 log = "0.4.17"
@@ -20,16 +26,20 @@ tokio = { version = "1.26.0", features = ["full"] }
 serde_json = "1.0.95"
 pretty_env_logger = "0.4.0"
 anyhow = "1.0.70"
-ractor =  { git = "https://github.com/slawlor/ractor.git", branch = "main", features = ["cluster"]}
-ractor_cluster = { git = "https://github.com/slawlor/ractor.git", branch = "main"}
+ractor = { git = "https://github.com/slawlor/ractor.git", branch = "main", features = [
+    "cluster",
+] }
+ractor_cluster = { git = "https://github.com/slawlor/ractor.git", branch = "main" }
 tokio-tungstenite = { version = "0.18.0", features = ["native-tls"] }
 async-trait = "0.1.68"
 rand = "0.8.5"
 futures-util = "0.3.28"
 ctor = "0.2.0"
-rocket = {version = "=0.5.0-rc.3", features = ["json"]}
+rocket = { version = "=0.5.0-rc.3", features = ["json"] }
 sled = "0.34.7"
 hubcaps = { git = "https://github.com/softprops/hubcaps.git", branch = "master" }
 rust-bert = { git = "https://github.com/guillaume-be/rust-bert.git", branch = "master" }
 html2md = "0.2.14"
 base64 = "0.21.1"
+once_cell = "1.18.0"
+rocket_cors = { git = "https://github.com/xunafay/rocket_cors.git", branch = "master" }

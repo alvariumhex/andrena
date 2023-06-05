@@ -1,7 +1,7 @@
 use std::{collections::HashMap, env};
 
 use log::{error, info, trace};
-use ractor::{call, Actor, ActorProcessingErr, ActorRef, BytesConvertable, Message};
+use ractor::{call, Actor, ActorProcessingErr, ActorRef, Message};
 use serde::{Deserialize, Serialize};
 use serenity::{
     async_trait,

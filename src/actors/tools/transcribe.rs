@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, path::Path, process::Command};
+use std::{collections::HashMap, env, process::Command};
 
 use super::embeddings::Embeddable;
 use async_openai::{types::CreateTranscriptionRequestArgs, Client};

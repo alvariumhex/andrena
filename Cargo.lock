@@ -54,6 +54,7 @@ dependencies = [
  "html2md",
  "hubcaps",
  "log",
+ "once_cell",
  "pretty_env_logger",
  "ractor",
  "ractor_cluster",
@@ -61,6 +62,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rocket",
+ "rocket_cors",
  "rust-bert",
  "rustube",
  "serde",
@@ -1997,9 +1999,9 @@ checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "once_cell"
-version = "1.17.1"
+version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7e5500299e16ebb147ae15a00a942af264cf3688f47923b8fc2cd5858f23ad3"
+checksum = "dd8b5dd2ae5ed71462c540258bedcb51965123ad7e7ccf4b9a8cafaa4a63576d"
 
 [[package]]
 name = "openssl"
@@ -2711,6 +2713,22 @@ dependencies = [
  "rocket_http",
  "syn 2.0.11",
  "unicode-xid",
+]
+
+[[package]]
+name = "rocket_cors"
+version = "0.6.0-alpha2"
+source = "git+https://github.com/xunafay/rocket_cors.git?branch=master#0b057e24cc26cd7fdd8162d1b47364d0b41115f9"
+dependencies = [
+ "http",
+ "log",
+ "regex",
+ "rocket",
+ "serde",
+ "serde_derive",
+ "unicase",
+ "unicase_serde",
+ "url",
 ]
 
 [[package]]
@@ -3712,6 +3730,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50f37be617794602aabbeee0be4f259dc1778fabe05e2d67ee8f79326d5cb4f6"
 dependencies = [
  "version_check",
+]
+
+[[package]]
+name = "unicase_serde"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ef53697679d874d69f3160af80bc28de12730a985d57bdf2b47456ccb8b11f1"
+dependencies = [
+ "serde",
+ "unicase",
 ]
 
 [[package]]
