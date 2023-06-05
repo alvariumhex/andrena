@@ -13,19 +13,27 @@ pub struct Space {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Page {
-    pub id: String,
-    pub title: String,
-    pub status: String,
-    pub space: Space,
-    pub body: Body,
+pub struct PageChildren {
+    pub page: PaginatedRepsonse<Page>,
     #[serde(rename = "_links")]
     pub links: Links,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Page {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub space: Option<Space>,
+    pub body: Option<Body>,
+    #[serde(rename = "_links")]
+    pub links: Links,
+    pub children: Option<PageChildren>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Body {
-    pub view: BodyView,
+    pub view: Option<BodyView>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -99,7 +107,7 @@ impl Session {
         let response = self
             .client
             .get(url)
-            .query(&[("expand", "body.view,space")])
+            .query(&[("expand", "body.view,space,children.page")])
             .send()
             .await
             .unwrap();
@@ -144,7 +152,7 @@ impl Session {
         let response = self
             .client
             .get(url)
-            .query(&[("expand", "body.view,space")])
+            .query(&[("expand", "body.view,space,children.page")])
             .send()
             .await
             .unwrap();

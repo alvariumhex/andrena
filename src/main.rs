@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 #![deny(unsafe_code)]
 
-use std::{sync::{Arc, Mutex}, collections::{HashMap, HashSet}};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 
 use actors::{
     channel::ChannelMessage,
@@ -13,8 +16,8 @@ use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
 use ractor::{call, Actor, ActorRef};
 use regex::Regex;
-use rocket::{serde::json::Json, http::Method};
-use rocket_cors::{AllowedOrigins, CorsOptions, Method as CorsMethod, AllowedHeaders};
+use rocket::{http::Method, serde::json::Json};
+use rocket_cors::{AllowedHeaders, AllowedOrigins, CorsOptions, Method as CorsMethod};
 use serenity::futures::StreamExt;
 use tokio::net::TcpListener;
 
@@ -112,17 +115,17 @@ async fn main() {
     tokio::spawn(async move {
         info!("Launching rocket server");
         let cors = CorsOptions::default()
-        .allowed_origins(AllowedOrigins::all())
-        .allowed_methods(
-            vec![Method::Get, Method::Post, Method::Patch, Method::Options]
-                .into_iter()
-                .map(|m| m.into())
-                .collect::<HashSet<CorsMethod>>(),
-        )
-        .allowed_headers(AllowedHeaders::all())
-        .allow_credentials(true)
-        .to_cors()
-        .expect("Failed to build CORS");
+            .allowed_origins(AllowedOrigins::all())
+            .allowed_methods(
+                vec![Method::Get, Method::Post, Method::Patch, Method::Options]
+                    .into_iter()
+                    .map(|m| m.into())
+                    .collect::<HashSet<CorsMethod>>(),
+            )
+            .allowed_headers(AllowedHeaders::all())
+            .allow_credentials(true)
+            .to_cors()
+            .expect("Failed to build CORS");
 
         rocket::build()
             .mount("/", routes![channel, graph_nodes, graph_edges])
@@ -155,7 +158,7 @@ async fn main() {
 
         for page in pages {
             let mut graph = GRAPH.lock().unwrap();
-            let md = html2md::parse_html(&page.body.view.value);
+            let md = html2md::parse_html(&page.body.unwrap().view.unwrap().value);
 
             // replace relative links with absolute links
             let md = md.replace("(/wiki/", "(https://laborelec.atlassian.net/wiki/");
@@ -165,6 +168,17 @@ async fn main() {
                     .unwrap();
             let result = regex.captures_iter(&md);
             let link = page.links.clone()._self;
+            if page.children.is_some() {
+                for child in &page.children.unwrap().page.results {
+                    let link_to = format!(
+                        "https://laborelec.atlassian.net/wiki/rest/api/content/{}",
+                        child.id
+                    );
+                    info!("Child Link: {:?} -> {:?}", link, link_to);
+                    graph.add_edge(link.clone(), "child of".to_owned(), link_to)
+                }
+            }
+
             for cap in result {
                 let id = cap.get(1).unwrap().as_str();
                 let link_to = format!(
@@ -173,7 +187,7 @@ async fn main() {
                 );
 
                 info!("Link: {:?} -> {:?}", link, link_to);
-                graph.add_edge(link.clone(), link_to)
+                graph.add_edge(link.clone(), "links to".to_owned(), link_to)
             }
 
             let mut metadata = HashMap::new();
@@ -217,8 +231,8 @@ mod test {
     #[test]
     fn match_url() {
         let regex =
-        Regex::new(r"(?m)\(https://laborelec\.atlassian\.net/wiki/.*/pages/(\d+)/?.*\)")
-            .unwrap();
+            Regex::new(r"(?m)\(https://laborelec\.atlassian\.net/wiki/.*/pages/(\d+)/?.*\)")
+                .unwrap();
         let test = "[](https://laborelec.atlassian.net/wiki/spaces/EP/pages/110985217/Proposed+common+solution+for+public+interface+of+transverse+components)";
         let mut result = regex.captures_iter(test);
         assert_eq!(result.next().unwrap().get(1).unwrap().as_str(), "110985217")
