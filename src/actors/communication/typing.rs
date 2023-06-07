@@ -64,7 +64,7 @@ impl Actor for TypingActor {
 
                 for (channel, typing) in &state.channels {
                     if *typing {
-                        trace!("Typing in channel {}", channel);
+                        // trace!("Typing in channel {}", channel);
                         for actor in actors.clone() {
                             cast(&actor, ChatActorMessage::Typing(*channel)).unwrap();
                         }

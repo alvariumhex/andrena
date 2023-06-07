@@ -2760,8 +2760,8 @@ dependencies = [
 
 [[package]]
 name = "rust-bert"
-version = "0.20.1-alpha"
-source = "git+https://github.com/guillaume-be/rust-bert.git?branch=master#62b8e3a176406ccdf3c68f19d52c877e00ac73ea"
+version = "0.21.0"
+source = "git+https://github.com/guillaume-be/rust-bert.git?branch=main#75cf52dd4536c2bdb8aab45db999b08279b00a8e"
 dependencies = [
  "cached-path",
  "dirs",

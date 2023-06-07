@@ -155,7 +155,7 @@ impl Actor for DiscordActor {
             }
             ChatActorMessage::Typing(channel_id) => {
                 if state.channels.contains(&channel_id) {
-                    trace!("Typing in channel: {}", channel_id);
+                    // trace!("Typing in channel: {}", channel_id);
                     ChannelId(channel_id)
                         .broadcast_typing(&state.http)
                         .await

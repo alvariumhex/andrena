@@ -149,7 +149,7 @@ async fn main() {
             .await
             .expect("Failed to get pages");
 
-        info!(
+        debug!(
             "Space({:?}): {:?} with {} pages",
             space.key,
             space.name,
@@ -174,7 +174,7 @@ async fn main() {
                         "https://laborelec.atlassian.net/wiki/rest/api/content/{}",
                         child.id
                     );
-                    info!("Child Link: {:?} -> {:?}", link, link_to);
+                    trace!("Child Link: {:?} -> {:?}", link, link_to);
                     graph.add_edge(link.clone(), "child of".to_owned(), link_to)
                 }
             }
@@ -186,7 +186,7 @@ async fn main() {
                     id
                 );
 
-                info!("Link: {:?} -> {:?}", link, link_to);
+                trace!("Link: {:?} -> {:?}", link, link_to);
                 graph.add_edge(link.clone(), "links to".to_owned(), link_to)
             }
 
@@ -204,7 +204,7 @@ async fn main() {
                 );
                 metadata.insert("source".to_owned(), source);
             } else {
-                trace!("No source for page {:?}", page.id);
+                debug!("No source for page {:?}", page.id);
                 trace!("Links: {:?}", page.links);
             }
 

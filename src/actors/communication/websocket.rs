@@ -109,7 +109,7 @@ impl Actor for WebSocketActor {
                 Ok(())
             }
             ChatActorMessage::Typing(channel_id) => {
-                trace!("Sending typing message: {}", channel_id);
+                // trace!("Sending typing message: {}", channel_id);
                 if state.channels.contains(&channel_id) {
                     let string =
                         serde_json::to_string_pretty::<WebSocketMessage>(&WebSocketMessage {
