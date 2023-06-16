@@ -47,8 +47,8 @@ dependencies = [
  "async-openai",
  "async-recursion",
  "async-trait",
+ "atlas-confluence",
  "base64 0.21.2",
- "confluence",
  "ctor",
  "futures",
  "futures-util",
@@ -183,6 +183,21 @@ dependencies = [
  "tokio-rustls 0.23.4",
  "tungstenite 0.17.3",
  "webpki-roots",
+]
+
+[[package]]
+name = "atlas-confluence"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f231520eafe0db4c4cf74afbbb7a7d523eac396b52ab68cd277f42d4d105eed"
+dependencies = [
+ "async-recursion",
+ "base64 0.21.2",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -435,19 +450,6 @@ checksum = "35ed6e9d84f0b51a7f52daf1c7d71dd136fd7a3f41a8462b8cdb8c78d920fad4"
 dependencies = [
  "bytes",
  "memchr",
-]
-
-[[package]]
-name = "confluence"
-version = "0.1.0"
-dependencies = [
- "async-recursion",
- "base64 0.21.2",
- "log",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

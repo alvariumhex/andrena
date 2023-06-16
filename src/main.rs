@@ -11,7 +11,7 @@ use actors::{
     channel_sup::{ChannelSupervisor, ChannelSupervisorMessage},
     communication::discord::DiscordActor,
 };
-use confluence::Session;
+use atlas_confluence::Session;
 use graph::{Edge, Graph, Vertex};
 use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
