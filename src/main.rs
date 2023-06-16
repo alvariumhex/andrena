@@ -11,6 +11,7 @@ use actors::{
     channel_sup::{ChannelSupervisor, ChannelSupervisorMessage},
     communication::discord::DiscordActor,
 };
+use confluence::Session;
 use graph::{Edge, Graph, Vertex};
 use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
@@ -21,11 +22,8 @@ use rocket_cors::{AllowedHeaders, AllowedOrigins, CorsOptions, Method as CorsMet
 use serenity::futures::StreamExt;
 use tokio::net::TcpListener;
 
-use crate::confluence::session::{Page, Session};
-
 mod actors;
 mod ai_context;
-mod confluence;
 mod graph;
 
 #[macro_use]
@@ -136,6 +134,14 @@ async fn main() {
             .unwrap();
     });
 
+    extract_confluence().await;
+
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to listen for ctrl-c");
+}
+
+async fn extract_confluence() {
     let session = Session::new(
         "hannah.witvrouwen@external.engie.com".to_string(),
         "".to_string(),
@@ -211,10 +217,6 @@ async fn main() {
             graph.add_or_replace_vertex(link, metadata);
         }
     }
-
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to listen for ctrl-c");
 }
 
 #[cfg(test)]
